@@ -1,0 +1,13 @@
+{
+  "id": "enom",
+  "type": "registrar",
+  "name": "Enom",
+  "description": "Register, transfer, renew, and sync Enom domains in FOSSBilling. Credentials come from the registrar form.",
+  "icon_url": "https://raw.githubusercontent.com/TAJ-IT-Solutions-Limited/fossbilling-enom/main/assets/icon.svg",
+  "homepage_url": "https://github.com/TAJ-IT-Solutions-Limited/fossbilling-enom",
+  "author": "TAJHOST",
+  "author_url": "https://tajhost.com",
+  "license": "Apache 2.0 - https://www.apache.org/licenses/LICENSE-2.0",
+  "version": "1.0.0",
+  "minimum_fossbilling_version": "0.8.0"
+}
