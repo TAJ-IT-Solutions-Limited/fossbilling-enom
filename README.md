@@ -99,6 +99,8 @@ The adapter returns Enom's `Err1` text as the registrar error.
 
 [TAJHOST](https://tajhost.com) provides cPanel hosting, domain registration, SSL certificates and business email, together with IT infrastructure and security services. TAJHOST is a brand of TAJ IT Solutions Limited (registered in Malta, company no. C 117054). For questions or bug reports, open an issue or contact us through [tajhost.com](https://tajhost.com).
 
+This adapter's icon is `assets/icon.svg`. The HostAssistant product icon is separate: https://hostassistant.com/assets/fossbilling-icon.svg.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
