@@ -15,6 +15,28 @@ declare(strict_types=1);
 
 const ENOM_LIVE_COMMANDS = ['GetBalance', 'Check', 'GetDomainInfo'];
 
+/**
+ * FOSSBilling's composer autoload does not define these. load.php does, after it reads config.php.
+ * This script must not include that config file. DEBUG is set false so the logger and exception
+ * classes do not walk a stack trace. PATH_CONFIG points at an empty array, not the billing config.
+ */
+function enom_live_define_constants(?string $fossPath = null): void
+{
+    if (!defined('DEBUG')) {
+        define('DEBUG', false);
+    }
+    if ($fossPath !== null && $fossPath !== '' && !defined('PATH_ROOT')) {
+        define('PATH_ROOT', $fossPath);
+    }
+    if (!defined('PATH_CONFIG')) {
+        $empty = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'enom-live-empty-config.php';
+        file_put_contents($empty, "<?php\nreturn [];\n");
+        define('PATH_CONFIG', $empty);
+    }
+}
+
+enom_live_define_constants();
+
 final class EnomLiveRefused extends RuntimeException
 {
 }
@@ -48,6 +70,16 @@ function enom_live_redact(string $text, string $uid, string $token): string
     }
 
     return preg_replace('/\b(pw|uid|password|token)=([^&\s]+)/i', '$1=[redacted]', $text) ?? $text;
+}
+
+function enom_live_error_text(Throwable $e, string $uid, string $token): string
+{
+    $text = $e->getMessage();
+    if ($e instanceof Error) {
+        $text .= ' ' . $e::class . ' ' . $e->getFile() . ':' . $e->getLine();
+    }
+
+    return enom_live_redact($text, $uid, $token);
 }
 
 /**
@@ -87,6 +119,7 @@ function enom_live_boot(string $fossPath): object
     if (!is_file($autoload)) {
         throw new RuntimeException('FOSSBilling vendor/autoload.php was not found');
     }
+    enom_live_define_constants($fossPath);
     require_once $autoload;
     if (!class_exists(Registrar_AdapterAbstract::class, true)) {
         throw new RuntimeException('FOSSBilling Registrar_AdapterAbstract did not load');
@@ -143,7 +176,7 @@ function enom_live_collect(object $adapter, string $checkName, string $existingN
             $error = (string) $balance['error'];
         }
     } catch (Throwable $e) {
-        $error = $e->getMessage();
+        $error = enom_live_error_text($e, $uid, $token);
     }
 
     $check = 'error';
@@ -153,7 +186,7 @@ function enom_live_collect(object $adapter, string $checkName, string $existingN
         $check = $available ? 'available' : 'taken';
     } catch (Throwable $e) {
         $check = 'error';
-        $error = $error !== '' ? $error : $e->getMessage();
+        $error = $error !== '' ? $error : enom_live_error_text($e, $uid, $token);
     }
 
     $expiry = '';
@@ -170,7 +203,7 @@ function enom_live_collect(object $adapter, string $checkName, string $existingN
         $registered = $existing->getRegistrationTime();
         $kept = $registered !== null && $registered !== 0;
     } catch (Throwable $e) {
-        $error = $error !== '' ? $error : $e->getMessage();
+        $error = $error !== '' ? $error : enom_live_error_text($e, $uid, $token);
     }
 
     return [
@@ -211,7 +244,7 @@ function enom_live_main(array $argv): void
         fwrite(STDERR, enom_live_redact($e->getMessage(), $uid, $token) . "\n");
         exit(2);
     } catch (Throwable $e) {
-        fwrite(STDERR, enom_live_redact($e->getMessage(), $uid, $token) . "\n");
+        fwrite(STDERR, enom_live_error_text($e, $uid, $token) . "\n");
         exit(1);
     }
 

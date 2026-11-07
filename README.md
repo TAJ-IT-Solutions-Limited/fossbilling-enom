@@ -63,7 +63,7 @@ ENOM_UID='the-uid' ENOM_TOKEN='the-token' php tools/live_readonly_check.php /pat
 history -c
 ```
 
-`name.tld` is the name to check for availability. `existing.name.tld` is a name already in the reseller account. The first argument is the FOSSBilling install. The script loads that install before the adapter, so `getHttpClient()` is checked against the installed registrar class. Symfony HttpClient is used when it is present. Otherwise the script uses curl.
+`name.tld` is the name to check for availability. `existing.name.tld` is a name already in the reseller account. The first argument is the FOSSBilling install. The script loads that install before the adapter, so `getHttpClient()` is checked against the installed registrar class. It sets `DEBUG` to false first and does not load `config.php`. Symfony HttpClient is used when it is present. Otherwise the script uses curl. A PHP error includes the class name and the file line.
 
 The script prints `balance_ok`, `check`, `expiry`, `ns`, and `registered_at_kept`. An error line is Enom's message with the UID and token removed. It does not print the balance amount or the token.
 
