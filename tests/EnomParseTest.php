@@ -6,19 +6,7 @@ declare(strict_types=1);
  * Recorded Enom responses. No network calls.
  */
 
-class Registrar_Exception extends Exception
-{
-}
-
-class Registrar_AdapterAbstract
-{
-    public function enableTestMode()
-    {
-        return true;
-    }
-}
-
-require dirname(__DIR__) . '/src/library/Registrar/Adapter/Enom.php';
+require __DIR__ . '/bootstrap.php';
 
 function ha_call(Registrar_Adapter_Enom $adapter, string $method, array $args)
 {

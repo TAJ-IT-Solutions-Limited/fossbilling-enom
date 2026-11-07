@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit bootstrap="tests/bootstrap.php">
+  <testsuites>
+    <testsuite name="enom">
+      <file>tests/EnomRequestTest.php</file>
+      <file>tests/LiveReadonlyTest.php</file>
+    </testsuite>
+  </testsuites>
+</phpunit>

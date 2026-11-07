@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * Enom (Tucows / OpenSRS) reseller registrar adapter — HTTP GET to interface.asp.
+ * Enom (Tucows / OpenSRS) reseller registrar adapter — HTTP POST to interface.asp.
  *
  * Copy into your FOSSBilling install as:
  *   src/library/Registrar/Adapter/Enom.php
@@ -16,7 +16,21 @@ declare(strict_types=1);
  */
 class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
 {
-    public const ADAPTER_BUILD = '2026-09-16-enom-text-preamble';
+    public const ADAPTER_BUILD = '2026-11-07-enom-post-fail-closed';
+
+    /**
+     * Sent only for countries that have no postal-code system.
+     * The exact string still has to be confirmed on the Enom OTE account before release.
+     */
+    public const POSTAL_CODE_NONE = '00000';
+
+    /**
+     * AE and HK have no postal codes. QA is included because many client profiles have none.
+     * IE is not included: Ireland uses Eircode.
+     *
+     * @var list<string>
+     */
+    private const NO_POSTAL_CODE_COUNTRIES = ['AE', 'HK', 'QA'];
 
     private const URL_PRODUCTION = 'https://reseller.enom.com/interface.asp';
 
@@ -28,6 +42,9 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         'pw' => '',
         'sandbox' => false,
     ];
+
+    /** @var object|null Test double. Production uses the parent HTTP client. */
+    private ?\Symfony\Contracts\HttpClient\HttpClientInterface $httpClientOverride = null;
 
     /** @var array{http_status?: int, content_type?: string, parsed_as?: string, body_snippet?: string} */
     private array $lastHttpMeta = [];
@@ -49,16 +66,25 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         } else {
             throw new Registrar_Exception(
                 'The ":domain_registrar" domain registrar is not fully configured. Please configure the :missing',
-                [':domain_registrar' => 'Enom', ':missing' => 'Enom PW (API token / password)'],
+                [':domain_registrar' => 'Enom', ':missing' => 'Enom API token'],
                 3001
             );
         }
 
-        if (isset($options['sandbox'])) {
-            $this->config['sandbox'] = filter_var($options['sandbox'], FILTER_VALIDATE_BOOLEAN)
-                || $options['sandbox'] === '1'
-                || $options['sandbox'] === 1;
+    }
+
+    public function setHttpClient(\Symfony\Contracts\HttpClient\HttpClientInterface $client): void
+    {
+        $this->httpClientOverride = $client;
+    }
+
+    public function getHttpClient(): \Symfony\Contracts\HttpClient\HttpClientInterface
+    {
+        if ($this->httpClientOverride !== null) {
+            return $this->httpClientOverride;
         }
+
+        return parent::getHttpClient();
     }
 
     /**
@@ -79,7 +105,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
     public static function getConfig(): array
     {
         return [
-            'label' => 'Manages domains via Enom reseller API. Test connection uses GetBalance (no purchase).',
+            'label' => 'Manages domains via the Enom reseller API. Use FOSSBilling test mode for the OTE host.',
             'form' => [
                 'uid' => [
                     'text',
@@ -92,17 +118,9 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
                 'pw' => [
                     'password',
                     [
-                        'label' => 'Enom PW',
-                        'description' => 'Enom API password / token (never logged or returned in errors)',
+                        'label' => 'Enom API token',
+                        'description' => 'Enom API token (the pw parameter). Never logged or returned in errors.',
                         'required' => true,
-                    ],
-                ],
-                'sandbox' => [
-                    'checkbox',
-                    [
-                        'label' => 'Use test (OTE) environment',
-                        'description' => 'When enabled, requests go to resellertest.enom.com instead of reseller.enom.com',
-                        'required' => false,
                     ],
                 ],
             ],
@@ -156,24 +174,15 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             throw new Registrar_Exception('Registrant contact is required for Enom domain registration');
         }
 
-        [$first, $last] = $this->_splitName((string) $c->getName());
-        $phone = $this->_formatPhone($c);
-
-        $params = [
-            'SLD' => $domain->getSld(),
-            'TLD' => ltrim((string) $domain->getTld(false), '.'),
-            'NumYears' => $domain->getRegistrationPeriod() ?: 1,
-            'RegistrantFirstName' => $first,
-            'RegistrantLastName' => $last,
-            'RegistrantEmailAddress' => $c->getEmail(),
-            'RegistrantAddress1' => $c->getAddress1(),
-            'RegistrantCity' => $c->getCity(),
-            'RegistrantStateProvince' => $c->getState() ?: 'N/A',
-            'RegistrantPostalCode' => $c->getZip() ?: '00000',
-            'RegistrantCountry' => $c->getCountry() ?: 'US',
-            'RegistrantPhone' => $phone,
-            'EndUserIP' => $this->_endUserIp(),
-        ];
+        $params = array_merge(
+            [
+                'SLD' => $domain->getSld(),
+                'TLD' => ltrim((string) $domain->getTld(false), '.'),
+                'NumYears' => $domain->getRegistrationPeriod() ?: 1,
+                'EndUserIP' => $this->_endUserIp(),
+            ],
+            $this->_registrantParams($c)
+        );
 
         if (method_exists($c, 'getAddress2') && $c->getAddress2()) {
             $params['RegistrantAddress2'] = $c->getAddress2();
@@ -185,7 +194,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         $ns = $this->_nameserverParams($domain);
         $params = array_merge($params, $ns);
 
-        $this->_makeRequest('Purchase', $params);
+        $this->_assertDone($this->_makeRequest('Purchase', $params), 'Purchase');
 
         return true;
     }
@@ -200,12 +209,28 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             throw new Registrar_Exception('Auth / EPP code is required for Enom domain transfer');
         }
 
-        $this->_makeRequest('TP_CreateOrder', [
-            'SLD' => $domain->getSld(),
-            'TLD' => ltrim((string) $domain->getTld(false), '.'),
-            'AuthInfo' => (string) $auth,
+        $params = [
+            'OrderType' => 'Autoverification',
+            'DomainCount' => '1',
+            'SLD1' => $domain->getSld(),
+            'TLD1' => ltrim((string) $domain->getTld(false), '.'),
+            'AuthInfo1' => (string) $auth,
             'EndUserIP' => $this->_endUserIp(),
-        ]);
+        ];
+        $contact = $domain->getContactRegistrar();
+        if ($contact) {
+            $params = array_merge($params, $this->_transferRegistrantParams($contact));
+        }
+        $data = $this->_makeRequest('TP_CreateOrder', $params);
+        $orderId = $this->_transferOrderId($data);
+        if ($this->_transferAwaitingConsent($data)) {
+            $this->getLog()->info('Enom TP_CreateOrder pending consent id=' . $orderId);
+            return true;
+        }
+        $this->_assertDone($data, 'TP_CreateOrder');
+        if ($orderId !== '') {
+            $this->getLog()->info('Enom TP_CreateOrder id=' . $orderId);
+        }
 
         return true;
     }
@@ -215,12 +240,12 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
      */
     public function renewDomain(Registrar_Domain $domain): bool
     {
-        $this->_makeRequest('Extend', [
+        $this->_assertDone($this->_makeRequest('Extend', [
             'SLD' => $domain->getSld(),
             'TLD' => ltrim((string) $domain->getTld(false), '.'),
             'NumYears' => $domain->getRegistrationPeriod() ?: 1,
             'EndUserIP' => $this->_endUserIp(),
-        ]);
+        ]), 'Extend');
 
         return true;
     }
@@ -233,6 +258,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         $data = $this->_makeRequest('GetDomainInfo', [
             'SLD' => $domain->getSld(),
             'TLD' => ltrim((string) $domain->getTld(false), '.'),
+            'responsetype' => 'xml',
         ]);
 
         $exp = $this->_firstKey($data, ['ExpiryDate', 'expiration-date', 'ExpirationDate', 'expiredate']);
@@ -241,31 +267,29 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             $exp = $this->_deepKey($data, ['expiration', 'Expiration', 'ExpirationDate']);
         }
         if ($exp !== null && is_string($exp)) {
-            $ts = strtotime($exp);
-            if ($ts !== false) {
+            $ts = $this->_enomCalendarTime($exp);
+            if ($ts !== null) {
                 $domain->setExpirationTime($ts);
             }
         }
 
         $created = $this->_firstKey($data, ['CreateDate', 'registration-date', 'RegistrationDate']);
-        if ($created !== null && is_string($created)) {
-            $ts = strtotime($created);
-            if ($ts !== false) {
+        if (is_string($created) && trim($created) !== '') {
+            $ts = $this->_enomCalendarTime($created);
+            if ($ts !== null) {
                 $domain->setRegistrationTime($ts);
             }
         }
 
-        for ($i = 1; $i <= 4; ++$i) {
-            $k = 'NS' . $i;
-            if (!empty($data[$k]) && is_string($data[$k])) {
-                $setter = 'setNs' . $i;
-                if (method_exists($domain, $setter)) {
-                    $domain->{$setter}($data[$k]);
-                }
-            }
-        }
+        $this->_applyNameservers($domain, $data);
 
-        $status = $this->_firstKey($data, ['status', 'Status', 'ServiceStatus', 'RRPCode']);
+        $status = $this->_firstKey($data, ['registrationstatus', 'RegistrationStatus', 'ServiceStatus']);
+        if ($status === null) {
+            $status = $this->_deepKey($data, ['registrationstatus', 'RegistrationStatus']);
+        }
+        if ($status === null) {
+            $status = $this->_firstKey($data, ['status', 'Status']);
+        }
         if ($status !== null && is_string($status) && method_exists($domain, 'setStatus')) {
             $domain->setStatus($status);
         }
@@ -287,7 +311,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             $this->_nameserverParams($domain)
         );
 
-        $this->_makeRequest('ModifyNS', $params);
+        $this->_assertDone($this->_makeRequest('ModifyNS', $params), 'ModifyNS');
 
         return true;
     }
@@ -396,7 +420,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
     }
 
     /**
-     * Execute a GET request to Enom interface.asp.
+     * Execute a POST to Enom interface.asp. Credentials stay in the body.
      *
      * @param string $command Enom Command= value (e.g. Check, Purchase, GetBalance)
      * @param array<string, scalar|null> $params Additional query parameters (UID/PW/ResponseType added automatically)
@@ -420,13 +444,14 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             $params
         );
 
-        $this->getLog()->debug('Enom API [' . self::ADAPTER_BUILD . ']: ' . $this->_redactUrl($base . '?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986)));
+        $host = parse_url($base, PHP_URL_HOST);
+        $this->getLog()->debug('Enom API [' . self::ADAPTER_BUILD . '] POST ' . $command . ' host=' . (is_string($host) ? $host : ''));
 
         $client = $this->getHttpClient()->withOptions(['timeout' => 90]);
         $body = '';
 
         try {
-            $response = $client->request('GET', $base, ['query' => $query]);
+            $response = $client->request('POST', $base, ['body' => $query]);
             $body = $response->getContent(false);
             $this->lastHttpMeta['http_status'] = $response->getStatusCode();
             $headers = $response->getHeaders(false);
@@ -442,7 +467,12 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
 
         $flat = $this->_parseEnomBody($body);
 
-        $errCount = isset($flat['ErrCount']) ? (int) $flat['ErrCount'] : 0;
+        if (!is_array($flat) || !array_key_exists('ErrCount', $flat)) {
+            $this->getLog()->err('Enom unexpected response: ' . ($this->lastHttpMeta['body_snippet'] ?? $this->_bodySnippet($body)));
+            throw new Registrar_Exception('unexpected response: check credentials / IP allow-list / WAF');
+        }
+
+        $errCount = (int) $flat['ErrCount'];
         if ($errCount > 0) {
             $msg = $this->_enomErrorMessage($flat);
             $this->getLog()->err('Enom API error: ' . $msg);
@@ -486,7 +516,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         $trim = ltrim($normalized);
         $looksXml = $trim !== '' && ($trim[0] === '<' || strncasecmp($trim, '<?xml', 5) === 0)
             && !preg_match('/<(?:html|body|strong)\b/i', substr($trim, 0, 240));
-        if ($looksXml) {
+        if ($looksXml && function_exists('simplexml_load_string')) {
             $xml = @simplexml_load_string($normalized, 'SimpleXMLElement', LIBXML_NOCDATA);
             if ($xml instanceof \SimpleXMLElement) {
                 $asJson = json_decode(json_encode($xml), true);
@@ -515,13 +545,11 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         $status = $this->lastHttpMeta['http_status'] ?? 0;
         $ctype = $this->lastHttpMeta['content_type'] ?? '';
         $this->getLog()->err(
-            'Enom unparseable response [' . self::ADAPTER_BUILD . '] HTTP ' . $status
+            'Enom unexpected response [' . self::ADAPTER_BUILD . '] HTTP ' . $status
             . ' content-type=' . $ctype . ' snippet=' . $snippet
         );
 
-        throw new Registrar_Exception(
-            'Enom returned an unparseable response (HTTP ' . $status . '; ' . $ctype . '; ' . $snippet . ')'
-        );
+        throw new Registrar_Exception('unexpected response: check credentials / IP allow-list / WAF');
     }
 
     /**
@@ -557,6 +585,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
     {
         $ir = $decoded['InterfaceResponse'] ?? $decoded['interface-response'] ?? $decoded['interface_response'] ?? null;
         if (is_array($ir)) {
+            // One level only. Nested blocks such as GetDomainInfo/services stay arrays.
             return array_merge($decoded, $ir);
         }
 
@@ -700,13 +729,256 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
     }
 
     /**
+     * @param array<string, mixed> $data
+     */
+    private function _assertDone(array $data, string $action): void
+    {
+        if (array_key_exists('Done', $data)) {
+            $done = $data['Done'];
+            $ok = $done === true || $done === 1 || $done === '1' || (is_string($done) && strcasecmp($done, 'true') === 0);
+            if (!$ok) {
+                throw new Registrar_Exception($action . ' was not completed');
+            }
+        }
+        if (isset($data['RRPCode']) && $data['RRPCode'] !== '') {
+            $code = (int) $data['RRPCode'];
+            if (!in_array($code, [200, 210, 1300], true)) {
+                throw new Registrar_Exception($action . ' was refused');
+            }
+            if ($code === 1300) {
+                $orderId = $this->_firstKey($data, ['OrderID', 'orderid']);
+                $this->getLog()->info('Enom ' . $action . ' queued RRPCode=1300 order=' . (string) $orderId);
+            }
+        }
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function _registrantParams(Registrar_Domain_Contact $c): array
+    {
+        [$first, $last] = $this->_splitName((string) $c->getName());
+
+        $city = $this->_requiredRegistrant('City', $c->getCity());
+        $state = trim((string) $c->getState());
+        if ($state === '') {
+            $state = $city;
+            $this->getLog()->info('Enom registrant StateProvince was derived from the client city');
+        }
+        $country = strtoupper($this->_requiredRegistrant('Country', $c->getCountry()));
+        $postal = trim((string) $c->getZip());
+        if ($postal === '') {
+            if (!in_array($country, self::NO_POSTAL_CODE_COUNTRIES, true)) {
+                throw new Registrar_Exception('Registrant PostalCode is required');
+            }
+            $postal = self::POSTAL_CODE_NONE;
+        }
+
+        return [
+            'RegistrantFirstName' => $this->_requiredRegistrant('FirstName', $first),
+            'RegistrantLastName' => $this->_requiredRegistrant('LastName', $last),
+            'RegistrantEmailAddress' => $this->_requiredRegistrant('EmailAddress', $c->getEmail()),
+            'RegistrantAddress1' => $this->_requiredRegistrant('Address1', $c->getAddress1()),
+            'RegistrantCity' => $city,
+            'RegistrantStateProvince' => $state,
+            'RegistrantPostalCode' => $postal,
+            'RegistrantCountry' => $country,
+            'RegistrantPhone' => $this->_requiredRegistrant('Phone', $this->_formatPhone($c)),
+        ];
+    }
+
+    /**
+     * A transfer sends the registrant block only when every core field is already present.
+     * An incomplete profile sends none, so Enom is not given a partial contact.
+     *
+     * @return array<string, string>
+     */
+    private function _transferRegistrantParams(Registrar_Domain_Contact $c): array
+    {
+        [$first, $last] = $this->_splitName((string) $c->getName());
+        $params = [
+            'RegistrantFirstName' => trim($first),
+            'RegistrantLastName' => trim($last),
+            'RegistrantEmailAddress' => trim((string) $c->getEmail()),
+            'RegistrantAddress1' => trim((string) $c->getAddress1()),
+            'RegistrantCity' => trim((string) $c->getCity()),
+            'RegistrantStateProvince' => trim((string) $c->getState()),
+            'RegistrantPostalCode' => trim((string) $c->getZip()),
+            'RegistrantCountry' => trim((string) $c->getCountry()),
+            'RegistrantPhone' => trim($this->_formatPhone($c)),
+        ];
+        foreach ($params as $value) {
+            if ($value === '') {
+                return [];
+            }
+        }
+        if (method_exists($c, 'getAddress2')) {
+            $this->_putIfPresent($params, 'RegistrantAddress2', $c->getAddress2());
+        }
+        if (method_exists($c, 'getCompany')) {
+            $this->_putIfPresent($params, 'RegistrantOrganizationName', $c->getCompany());
+        }
+
+        return $params;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private function _transferOrderId(array $data): string
+    {
+        $id = $this->_firstKey($data, ['TransferOrderID', 'transferorderid', 'OrderID']);
+        if ($id === null) {
+            $id = $this->_deepKey($data, ['transferorderid', 'TransferOrderID', 'OrderID']);
+        }
+
+        return $id ?? '';
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private function _transferAwaitingConsent(array $data): bool
+    {
+        return $this->_treeEquals($data, ['statusid', 'StatusID'], '100')
+            || $this->_treeEquals($data, ['statusdesc', 'StatusDesc'], 'Pending consent');
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param list<string> $keys
+     */
+    private function _treeEquals(array $data, array $keys, string $expected): bool
+    {
+        foreach ($data as $key => $value) {
+            if (is_string($key) && in_array($key, $keys, true) && is_scalar($value) && strcasecmp((string) $value, $expected) === 0) {
+                return true;
+            }
+            if (is_array($value) && $this->_treeEquals($value, $keys, $expected)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string, string> $params
+     */
+    private function _putIfPresent(array &$params, string $key, ?string $value): void
+    {
+        $value = trim((string) $value);
+        if ($value !== '') {
+            $params[$key] = $value;
+        }
+    }
+
+    private function _requiredRegistrant(string $field, ?string $value): string
+    {
+        $value = trim((string) $value);
+        if ($value === '') {
+            throw new Registrar_Exception('Registrant ' . $field . ' is required');
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private function _applyNameservers(Registrar_Domain $domain, array $data): void
+    {
+        $hosts = $this->_nameserversFromDomainInfo($data);
+        if ($hosts === []) {
+            for ($i = 1; $i <= 4; ++$i) {
+                $value = $data['NS' . $i] ?? null;
+                if (is_string($value) && $value !== '') {
+                    $hosts[] = $value;
+                }
+            }
+        }
+        foreach ($hosts as $index => $host) {
+            $slot = $index + 1;
+            if ($slot > 4) {
+                break;
+            }
+            $setter = 'setNs' . $slot;
+            if (method_exists($domain, $setter)) {
+                $domain->{$setter}($host);
+            }
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     *
+     * @return list<string>
+     */
+    private function _nameserversFromDomainInfo(array $data): array
+    {
+        $blocks = [];
+        if (isset($data['services']) && is_array($data['services'])) {
+            $blocks[] = $data['services'];
+        }
+        foreach (['GetDomainInfo', 'getdomaininfo'] as $key) {
+            if (isset($data[$key]['services']) && is_array($data[$key]['services'])) {
+                $blocks[] = $data[$key]['services'];
+            }
+        }
+        $hosts = [];
+        foreach ($blocks as $services) {
+            $hosts = array_merge($hosts, $this->_hostsFromServiceEntries($services));
+        }
+
+        return $hosts;
+    }
+
+    /**
+     * @param array<string, mixed> $services
+     *
+     * @return list<string>
+     */
+    private function _hostsFromServiceEntries(array $services): array
+    {
+        $entries = $services['entry'] ?? null;
+        if (!is_array($entries)) {
+            return [];
+        }
+        if (isset($entries['@attributes']) || isset($entries['configuration']) || isset($entries['name'])) {
+            $entries = [$entries];
+        }
+        $hosts = [];
+        foreach ($entries as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $name = $entry['name'] ?? ($entry['@attributes']['name'] ?? '');
+            if ($name !== 'dnsserver') {
+                continue;
+            }
+            $dns = $entry['configuration']['dns'] ?? null;
+            if (is_string($dns) && $dns !== '') {
+                $hosts[] = $dns;
+            } elseif (is_array($dns)) {
+                foreach ($dns as $item) {
+                    if (is_string($item) && $item !== '') {
+                        $hosts[] = $item;
+                    }
+                }
+            }
+        }
+
+        return $hosts;
+    }
+
+    /**
      * @return array{0: string, 1: string}
      */
     private function _splitName(string $full): array
     {
         $full = trim($full);
         if ($full === '') {
-            return ['Registrant', 'User'];
+            return ['', ''];
         }
         $parts = preg_split('/\s+/', $full, 2);
 
@@ -724,7 +996,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             return '+' . ltrim($cc, '+') . '.' . ltrim($tel, '+');
         }
 
-        return $tel !== '' ? $tel : '+1.0000000000';
+        return $tel;
     }
 
     /** @return array<string, string> NS1..NS4 for Enom */
@@ -746,6 +1018,29 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         }
 
         return $out;
+    }
+
+    /**
+     * Enom dates look like 11/6/2027 or 11/6/2027 7:34:00 PM. The clock time is
+     * not a UTC instant. Noon UTC keeps that calendar day in the billing timezone.
+     */
+    private function _enomCalendarTime(string $value): ?int
+    {
+        $value = trim($value);
+        if (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{4})\b/', $value, $match) === 1) {
+            $month = (int) $match[1];
+            $day = (int) $match[2];
+            $year = (int) $match[3];
+            if (!checkdate($month, $day, $year)) {
+                return null;
+            }
+
+            return gmmktime(12, 0, 0, $month, $day, $year);
+        }
+
+        $parsed = strtotime($value);
+
+        return $parsed === false ? null : $parsed;
     }
 
     private function _endUserIp(): string
