@@ -4,6 +4,7 @@
 
 - `getHttpClient()` returns `Symfony\Contracts\HttpClient\HttpClientInterface`, the same signature as FOSSBilling 0.8.9. The read-only check no longer defines its own registrar classes, so it cannot hide a signature mismatch.
 - The read-only check defines `DEBUG` as false before it loads FOSSBilling, and it does not include the billing `config.php`. A PHP error in the output includes the class and file line.
+- An Enom expiration such as `11/6/2027 7:34:00 PM` is stored as that calendar day. The clock time is not applied, so the billing timezone cannot move it to the next day.
 - `tools/live_readonly_check.php` calls only GetBalance, Check, and GetDomainInfo on the live host. Credentials stay in the environment.
 
 - Enom calls are POST bodies. The API token is not put in the URL. POST itself is not in the Enom docs, so release waits for a read-only check.

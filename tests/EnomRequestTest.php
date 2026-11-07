@@ -206,7 +206,7 @@ XML;
         $this->assertSame('ns1.nested.example', $domain->getNs1());
         $this->assertSame('ns2.nested.example', $domain->getNs2());
         $this->assertSame('Registered', $domain->status);
-        $this->assertSame(strtotime('10/17/2027 9:43:20 PM'), $domain->getExpirationTime());
+        $this->assertSame('2027-10-17', gmdate('Y-m-d', (int) $domain->getExpirationTime()));
     }
 
     public function testTransferPendingConsentIsSuccess(): void
@@ -229,6 +229,26 @@ XML;
 XML;
         $client = new FakeEnomClient([$xml]);
         $this->assertTrue($this->adapter($client)->transferDomain(enom_test_domain()));
+    }
+
+    public function testEnomDatesKeepTheCalendarDayInTheBillingTimezone(): void
+    {
+        $previous = date_default_timezone_get();
+        try {
+            foreach (['UTC', 'Asia/Dubai', 'America/New_York'] as $zone) {
+                date_default_timezone_set($zone);
+                foreach (['11/6/2027', '11/6/2027 7:34:00 PM'] as $raw) {
+                    $client = $this->body(['ErrCount' => '0', 'expiration' => $raw]);
+                    $domain = enom_test_domain();
+                    $this->adapter($client)->getDomainDetails($domain);
+                    $stamp = (int) $domain->getExpirationTime();
+                    $this->assertSame('2027-11-06', gmdate('Y-m-d', $stamp), $zone . ' ' . $raw);
+                    $this->assertSame('2027-11-06', date('Y-m-d', $stamp), $zone . ' ' . $raw);
+                }
+            }
+        } finally {
+            date_default_timezone_set($previous);
+        }
     }
 }
 

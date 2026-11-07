@@ -267,16 +267,16 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             $exp = $this->_deepKey($data, ['expiration', 'Expiration', 'ExpirationDate']);
         }
         if ($exp !== null && is_string($exp)) {
-            $ts = strtotime($exp);
-            if ($ts !== false) {
+            $ts = $this->_enomCalendarTime($exp);
+            if ($ts !== null) {
                 $domain->setExpirationTime($ts);
             }
         }
 
         $created = $this->_firstKey($data, ['CreateDate', 'registration-date', 'RegistrationDate']);
         if (is_string($created) && trim($created) !== '') {
-            $ts = strtotime($created);
-            if ($ts !== false) {
+            $ts = $this->_enomCalendarTime($created);
+            if ($ts !== null) {
                 $domain->setRegistrationTime($ts);
             }
         }
@@ -1018,6 +1018,29 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         }
 
         return $out;
+    }
+
+    /**
+     * Enom dates look like 11/6/2027 or 11/6/2027 7:34:00 PM. The clock time is
+     * not a UTC instant. Noon UTC keeps that calendar day in the billing timezone.
+     */
+    private function _enomCalendarTime(string $value): ?int
+    {
+        $value = trim($value);
+        if (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{4})\b/', $value, $match) === 1) {
+            $month = (int) $match[1];
+            $day = (int) $match[2];
+            $year = (int) $match[3];
+            if (!checkdate($month, $day, $year)) {
+                return null;
+            }
+
+            return gmmktime(12, 0, 0, $month, $day, $year);
+        }
+
+        $parsed = strtotime($value);
+
+        return $parsed === false ? null : $parsed;
     }
 
     private function _endUserIp(): string
