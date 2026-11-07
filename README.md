@@ -15,24 +15,23 @@ Built and maintained by [TAJHOST](https://tajhost.com).
 - Expiry and registration-date sync (`GetDomainInfo`).
 - Nameserver updates (`ModifyNS`).
 - Auth-code retrieval (`GetAuthCode`).
-- Connection test (`GetBalance`), which does not purchase a domain.
-- Replies may be Enom's key=value text (including the `;URL Interface` preamble), XML, HTML, or JSON. An Enom error is returned as the registrar error text.
+- Replies may be Enom's key=value text (including the `;URL Interface` preamble), XML, HTML, or JSON. A reply with no `ErrCount` is rejected. An Enom error is returned as the registrar error text.
 
 ## Requirements
 
 - FOSSBilling **0.8.0** or newer.
-- PHP 8.3+, which FOSSBilling already requires.
+- PHP 8.2 or newer.
 - An Enom reseller account, with the billing server's public IP allowed in Enom's API settings.
 
 ## Installation
 
-FOSSBilling's extension installer places modules, themes, translations, and payment gateways. It does not place a domain-registrar file, so this adapter is installed by copying one file and then installing it from the domain-registration page.
+Installation is manual. FOSSBilling's extension installer does not place a domain-registrar file.
 
 ### Copy the adapter, then install it
 
 1. Copy `src/library/Registrar/Adapter/Enom.php` from this repository to the same path inside FOSSBilling: `src/library/Registrar/Adapter/Enom.php`.
 2. In the admin panel, go to **System → Domain registration → Registrars → Enom → Install**.
-3. Enter the reseller UID and password, then use **Test connection**.
+3. Enter the reseller UID and password. Use FOSSBilling's test mode when the account is an OTE account.
 
 ### Manually from the release archive
 
@@ -47,10 +46,9 @@ Go to **System → Domain registration → Registrars → Enom**.
 | Field | Description |
 |---|---|
 | Enom UID | Reseller account ID (the login username). Required. |
-| Enom PW | API password. Required. It is not written to logs. |
-| Use test (OTE) environment | When on, commands go to `https://resellertest.enom.com/interface.asp` instead of `https://reseller.enom.com/interface.asp`. |
+| Enom PW | API password. Required. It is not written to logs. Requests are sent as a POST body, so the password is not placed in the URL. |
 
-FOSSBilling's own **Enable Test Mode** also sends commands to the test host.
+FOSSBilling's **Enable Test Mode** sends commands to `https://resellertest.enom.com/interface.asp`. There is no separate sandbox checkbox.
 
 In the Enom account, open the API settings and whitelist the public IP of the server that runs FOSSBilling. Enom checks that server IP. The visitor's address is sent separately as `EndUserIP` and does not replace the whitelist.
 
@@ -63,10 +61,9 @@ In the Enom account, open the API settings and whitelist the public IP of the se
 | Register | `Purchase` | Registrant fields are taken from the client profile |
 | Transfer | `TP_CreateOrder` | Requires the auth (EPP) code |
 | Renew | `Extend` | Uses the registration period on the order |
-| Sync details | `GetDomainInfo` | Expiry is read from `ExpiryDate`, or from `GetDomainInfo > status > expiration` |
+| Sync details | `GetDomainInfo` | XML reply. Expiry is read from `ExpiryDate`, or from `status > expiration`. Nameservers are read from `services/entry[name=dnsserver]/configuration/dns`. An empty registration date does not clear one already stored. |
 | Nameservers | `ModifyNS` | Up to four nameservers |
 | Auth code | `GetAuthCode` | Returned to FOSSBilling as the EPP code |
-| Test connection | `GetBalance` | Checks the UID, password, and that the reply parses. No purchase |
 
 ## Known limitations
 

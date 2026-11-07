@@ -1,0 +1,127 @@
+<?php
+
+declare(strict_types=1);
+
+use PHPUnit\Framework\TestCase;
+
+require __DIR__ . '/FakeEnomClient.php';
+
+final class EnomRequestTest extends TestCase
+{
+    private function adapter(FakeEnomClient $client): Registrar_Adapter_Enom
+    {
+        $adapter = new Registrar_Adapter_Enom(['uid' => 'fixture-user', 'pw' => 'fixture-pass']);
+        $adapter->setHttpClient($client);
+
+        return $adapter;
+    }
+
+    private function body(array $fields): FakeEnomClient
+    {
+        $lines = [];
+        foreach ($fields as $key => $value) {
+            $lines[] = $key . '=' . $value;
+        }
+
+        return new FakeEnomClient([implode("\n", $lines) . "\n"]);
+    }
+
+    public function testPurchaseExtendTransferAndModifyArePostedWithoutThePasswordInTheUrl(): void
+    {
+        $ok = ['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200', 'OrderID' => '55'];
+        $cases = [
+            'registerDomain' => 'Purchase',
+            'renewDomain' => 'Extend',
+            'transferDomain' => 'TP_CreateOrder',
+            'modifyNs' => 'ModifyNS',
+        ];
+        foreach ($cases as $method => $command) {
+            $client = $this->body($ok);
+            $domain = new Registrar_Domain();
+            $this->assertTrue($this->adapter($client)->{$method}($domain));
+            $this->assertSame('POST', $client->calls[0][0]);
+            $this->assertSame('https://reseller.enom.com/interface.asp', $client->calls[0][1]);
+            $this->assertArrayNotHasKey('query', $client->calls[0][2]);
+            $body = $client->calls[0][2]['body'];
+            $this->assertSame($command, $body['command']);
+            $this->assertSame('fixture-user', $body['uid']);
+            $this->assertSame('fixture-pass', $body['pw']);
+            $this->assertStringNotContainsString('fixture-pass', $client->calls[0][1]);
+        }
+    }
+
+    public function testTransferUsesIndexedEnomFields(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200', 'TransferOrderID' => '77']);
+        $this->adapter($client)->transferDomain(new Registrar_Domain());
+        $body = $client->calls[0][2]['body'];
+        $this->assertSame('Autoverification', $body['OrderType']);
+        $this->assertSame('1', $body['DomainCount']);
+        $this->assertSame('example', $body['SLD1']);
+        $this->assertSame('com', $body['TLD1']);
+        $this->assertSame('epp-code', $body['AuthInfo1']);
+        $this->assertArrayNotHasKey('SLD', $body);
+        $this->assertArrayNotHasKey('AuthInfo', $body);
+        $this->assertSame('Ada Lovelace', $body['RegistrantFirstName'] . ' ' . $body['RegistrantLastName']);
+    }
+
+    public function testMissingErrCountIsRejected(): void
+    {
+        $client = new FakeEnomClient(["<html><title>Attention Required</title><body>blocked</body></html>\n"]);
+        $this->expectException(Registrar_Exception::class);
+        $this->expectExceptionMessage('unexpected response: check credentials / IP allow-list / WAF');
+        $this->adapter($client)->isDomainAvailable(new Registrar_Domain());
+    }
+
+    public function testDoneFalseIsRejected(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'false', 'RRPCode' => '200']);
+        $this->expectException(Registrar_Exception::class);
+        $this->expectExceptionMessage('Purchase was not completed');
+        $this->adapter($client)->registerDomain(new Registrar_Domain());
+    }
+
+    public function testUnexpectedRrpCodeIsRejected(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '540']);
+        $this->expectException(Registrar_Exception::class);
+        $this->expectExceptionMessage('Extend was refused');
+        $this->adapter($client)->renewDomain(new Registrar_Domain());
+    }
+
+    public function testRegistrationRefusesAMissingCountry(): void
+    {
+        $contact = new Registrar_Domain_Contact(country: '');
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $this->expectException(Registrar_Exception::class);
+        $this->expectExceptionMessage('Registrant Country is required');
+        $this->adapter($client)->registerDomain(new Registrar_Domain($contact));
+    }
+
+    public function testNameserversComeFromTheDocumentedDnsEntries(): void
+    {
+        $xml = <<<'XML'
+<?xml version="1.0"?>
+<interface-response>
+  <ErrCount>0</ErrCount>
+  <Done>true</Done>
+  <services>
+    <entry name="dnsserver">
+      <configuration>
+        <dns>ns1.example.net</dns>
+        <dns>ns2.example.net</dns>
+      </configuration>
+    </entry>
+  </services>
+</interface-response>
+XML;
+        $client = new FakeEnomClient([$xml]);
+        $domain = new Registrar_Domain();
+        $domain->setRegistrationTime(1710000000);
+        $this->adapter($client)->getDomainDetails($domain);
+        $this->assertSame('xml', $client->calls[0][2]['body']['responsetype']);
+        $this->assertSame('ns1.example.net', $domain->nameservers[1]);
+        $this->assertSame('ns2.example.net', $domain->nameservers[2]);
+        $this->assertSame(1710000000, $domain->registrationTime);
+    }
+}
