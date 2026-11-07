@@ -3,6 +3,7 @@
   <testsuites>
     <testsuite name="enom">
       <file>tests/EnomRequestTest.php</file>
+      <file>tests/LiveReadonlyTest.php</file>
     </testsuite>
   </testsuites>
 </phpunit>

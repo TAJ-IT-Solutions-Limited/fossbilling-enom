@@ -52,6 +52,21 @@ FOSSBilling's **Enable Test Mode** sends commands to `https://resellertest.enom.
 
 In the Enom account, open the API settings and whitelist the public IP of the server that runs FOSSBilling. Enom checks that server IP. The visitor's address is sent separately as `EndUserIP` and does not replace the whitelist.
 
+## Read-only live check
+
+Simon runs this once on the billing server. It talks to the live Enom host only. The process can send `GetBalance`, `Check`, and `GetDomainInfo`. `Purchase`, `Extend`, `TP_CreateOrder`, and `ModifyNS` are refused before a request is made.
+
+Put the UID and API token in the environment for that command. Do not pass them as arguments. Then clear the shell history:
+
+```bash
+ENOM_UID='the-uid' ENOM_TOKEN='the-token' php tools/live_readonly_check.php /path/to/fossbilling name.tld existing.name.tld
+history -c
+```
+
+`name.tld` is the name to check for availability. `existing.name.tld` is a name already in the reseller account. The first argument is the FOSSBilling install, used only to find Symfony HttpClient. If that library is missing, the script uses curl.
+
+The script prints `balance_ok`, `check`, `expiry`, `ns`, and `registered_at_kept`. An error line is Enom's message with the UID and token removed. It does not print the balance amount or the token.
+
 ## Supported commands
 
 | FOSSBilling action | Enom command | Result |

@@ -2,6 +2,8 @@
 
 ## 1.0.2
 
+- `tools/live_readonly_check.php` calls only GetBalance, Check, and GetDomainInfo on the live host. Credentials stay in the environment.
+
 - Enom calls are POST bodies. The API token is not put in the URL. POST itself is not in the Enom docs, so release waits for a read-only check.
 - A response with no `ErrCount` is rejected instead of treated as success.
 - Purchase, Extend, TP_CreateOrder, and ModifyNS require `Done=true` when that field is present. `RRPCode` 200, 210, and 1300 are success. 1300 is a queued registration.
