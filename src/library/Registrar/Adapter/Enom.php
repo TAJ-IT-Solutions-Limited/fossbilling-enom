@@ -18,6 +18,20 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
 {
     public const ADAPTER_BUILD = '2026-11-07-enom-post-fail-closed';
 
+    /**
+     * Sent only for countries that have no postal-code system.
+     * The exact string still has to be confirmed on the Enom OTE account before release.
+     */
+    public const POSTAL_CODE_NONE = '00000';
+
+    /**
+     * AE and HK have no postal codes. QA is included because many client profiles have none.
+     * IE is not included: Ireland uses Eircode.
+     *
+     * @var list<string>
+     */
+    private const NO_POSTAL_CODE_COUNTRIES = ['AE', 'HK', 'QA'];
+
     private const URL_PRODUCTION = 'https://reseller.enom.com/interface.asp';
 
     private const URL_TEST = 'https://resellertest.enom.com/interface.asp';
@@ -52,7 +66,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         } else {
             throw new Registrar_Exception(
                 'The ":domain_registrar" domain registrar is not fully configured. Please configure the :missing',
-                [':domain_registrar' => 'Enom', ':missing' => 'Enom PW (API token / password)'],
+                [':domain_registrar' => 'Enom', ':missing' => 'Enom API token'],
                 3001
             );
         }
@@ -104,8 +118,8 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
                 'pw' => [
                     'password',
                     [
-                        'label' => 'Enom PW',
-                        'description' => 'Enom API password / token (never logged or returned in errors)',
+                        'label' => 'Enom API token',
+                        'description' => 'Enom API token (the pw parameter). Never logged or returned in errors.',
                         'required' => true,
                     ],
                 ],
@@ -205,13 +219,17 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         ];
         $contact = $domain->getContactRegistrar();
         if ($contact) {
-            $params = array_merge($params, $this->_presentRegistrantParams($contact));
+            $params = array_merge($params, $this->_transferRegistrantParams($contact));
         }
         $data = $this->_makeRequest('TP_CreateOrder', $params);
+        $orderId = $this->_transferOrderId($data);
+        if ($this->_transferAwaitingConsent($data)) {
+            $this->getLog()->info('Enom TP_CreateOrder pending consent id=' . $orderId);
+            return true;
+        }
         $this->_assertDone($data, 'TP_CreateOrder');
-        $orderId = $this->_firstKey($data, ['OrderID', 'TransferOrderID']);
-        if (is_string($orderId) && $orderId !== '') {
-            $this->getLog()->debug('Enom TP_CreateOrder id=' . $orderId);
+        if ($orderId !== '') {
+            $this->getLog()->info('Enom TP_CreateOrder id=' . $orderId);
         }
 
         return true;
@@ -724,8 +742,12 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         }
         if (isset($data['RRPCode']) && $data['RRPCode'] !== '') {
             $code = (int) $data['RRPCode'];
-            if ($code !== 200 && $code !== 210) {
+            if (!in_array($code, [200, 210, 1300], true)) {
                 throw new Registrar_Exception($action . ' was refused');
+            }
+            if ($code === 1300) {
+                $orderId = $this->_firstKey($data, ['OrderID', 'orderid']);
+                $this->getLog()->info('Enom ' . $action . ' queued RRPCode=1300 order=' . (string) $orderId);
             }
         }
     }
@@ -737,39 +759,59 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
     {
         [$first, $last] = $this->_splitName((string) $c->getName());
 
-        $params = [
+        $city = $this->_requiredRegistrant('City', $c->getCity());
+        $state = trim((string) $c->getState());
+        if ($state === '') {
+            $state = $city;
+            $this->getLog()->info('Enom registrant StateProvince was derived from the client city');
+        }
+        $country = strtoupper($this->_requiredRegistrant('Country', $c->getCountry()));
+        $postal = trim((string) $c->getZip());
+        if ($postal === '') {
+            if (!in_array($country, self::NO_POSTAL_CODE_COUNTRIES, true)) {
+                throw new Registrar_Exception('Registrant PostalCode is required');
+            }
+            $postal = self::POSTAL_CODE_NONE;
+        }
+
+        return [
             'RegistrantFirstName' => $this->_requiredRegistrant('FirstName', $first),
             'RegistrantLastName' => $this->_requiredRegistrant('LastName', $last),
             'RegistrantEmailAddress' => $this->_requiredRegistrant('EmailAddress', $c->getEmail()),
             'RegistrantAddress1' => $this->_requiredRegistrant('Address1', $c->getAddress1()),
-            'RegistrantCity' => $this->_requiredRegistrant('City', $c->getCity()),
-            'RegistrantCountry' => $this->_requiredRegistrant('Country', $c->getCountry()),
+            'RegistrantCity' => $city,
+            'RegistrantStateProvince' => $state,
+            'RegistrantPostalCode' => $postal,
+            'RegistrantCountry' => $country,
             'RegistrantPhone' => $this->_requiredRegistrant('Phone', $this->_formatPhone($c)),
         ];
-        $this->_putIfPresent($params, 'RegistrantStateProvince', $c->getState());
-        $this->_putIfPresent($params, 'RegistrantPostalCode', $c->getZip());
-
-        return $params;
     }
 
     /**
-     * Transfer orders send only the contact fields that exist. Empty state or postal code is omitted.
+     * A transfer sends the registrant block only when every core field is already present.
+     * An incomplete profile sends none, so Enom is not given a partial contact.
      *
      * @return array<string, string>
      */
-    private function _presentRegistrantParams(Registrar_Domain_Contact $c): array
+    private function _transferRegistrantParams(Registrar_Domain_Contact $c): array
     {
         [$first, $last] = $this->_splitName((string) $c->getName());
-        $params = [];
-        $this->_putIfPresent($params, 'RegistrantFirstName', $first);
-        $this->_putIfPresent($params, 'RegistrantLastName', $last);
-        $this->_putIfPresent($params, 'RegistrantEmailAddress', $c->getEmail());
-        $this->_putIfPresent($params, 'RegistrantAddress1', $c->getAddress1());
-        $this->_putIfPresent($params, 'RegistrantCity', $c->getCity());
-        $this->_putIfPresent($params, 'RegistrantStateProvince', $c->getState());
-        $this->_putIfPresent($params, 'RegistrantPostalCode', $c->getZip());
-        $this->_putIfPresent($params, 'RegistrantCountry', $c->getCountry());
-        $this->_putIfPresent($params, 'RegistrantPhone', $this->_formatPhone($c));
+        $params = [
+            'RegistrantFirstName' => trim($first),
+            'RegistrantLastName' => trim($last),
+            'RegistrantEmailAddress' => trim((string) $c->getEmail()),
+            'RegistrantAddress1' => trim((string) $c->getAddress1()),
+            'RegistrantCity' => trim((string) $c->getCity()),
+            'RegistrantStateProvince' => trim((string) $c->getState()),
+            'RegistrantPostalCode' => trim((string) $c->getZip()),
+            'RegistrantCountry' => trim((string) $c->getCountry()),
+            'RegistrantPhone' => trim($this->_formatPhone($c)),
+        ];
+        foreach ($params as $value) {
+            if ($value === '') {
+                return [];
+            }
+        }
         if (method_exists($c, 'getAddress2')) {
             $this->_putIfPresent($params, 'RegistrantAddress2', $c->getAddress2());
         }
@@ -778,6 +820,46 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         }
 
         return $params;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private function _transferOrderId(array $data): string
+    {
+        $id = $this->_firstKey($data, ['TransferOrderID', 'transferorderid', 'OrderID']);
+        if ($id === null) {
+            $id = $this->_deepKey($data, ['transferorderid', 'TransferOrderID', 'OrderID']);
+        }
+
+        return $id ?? '';
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    private function _transferAwaitingConsent(array $data): bool
+    {
+        return $this->_treeEquals($data, ['statusid', 'StatusID'], '100')
+            || $this->_treeEquals($data, ['statusdesc', 'StatusDesc'], 'Pending consent');
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param list<string> $keys
+     */
+    private function _treeEquals(array $data, array $keys, string $expected): bool
+    {
+        foreach ($data as $key => $value) {
+            if (is_string($key) && in_array($key, $keys, true) && is_scalar($value) && strcasecmp((string) $value, $expected) === 0) {
+                return true;
+            }
+            if (is_array($value) && $this->_treeEquals($value, $keys, $expected)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

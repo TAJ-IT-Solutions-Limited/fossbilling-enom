@@ -125,16 +125,31 @@ XML;
         $this->assertSame(1710000000, $domain->registrationTime);
     }
 
-    public function testUaeRegistrationOmitsEmptyStateAndPostalCode(): void
+    public function testUaeRegistrationFillsStateFromTheCityAndUsesThePostalPlaceholder(): void
     {
         $contact = new Registrar_Domain_Contact(state: '', zip: '');
         $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
         $this->assertTrue($this->adapter($client)->registerDomain(new Registrar_Domain($contact)));
         $body = $client->calls[0][2]['body'];
         $this->assertSame('Abu Dhabi', $body['RegistrantCity']);
+        $this->assertSame('Abu Dhabi', $body['RegistrantStateProvince']);
         $this->assertSame('AE', $body['RegistrantCountry']);
-        $this->assertArrayNotHasKey('RegistrantStateProvince', $body);
-        $this->assertArrayNotHasKey('RegistrantPostalCode', $body);
+        $this->assertSame(Registrar_Adapter_Enom::POSTAL_CODE_NONE, $body['RegistrantPostalCode']);
+    }
+
+    public function testRegistrationRefusesAMissingPostalCodeOutsideTheNoCodeList(): void
+    {
+        $contact = new Registrar_Domain_Contact(country: 'US', state: 'WA', zip: '');
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $this->expectException(Registrar_Exception::class);
+        $this->expectExceptionMessage('Registrant PostalCode is required');
+        $this->adapter($client)->registerDomain(new Registrar_Domain($contact));
+    }
+
+    public function testQueuedPurchaseCodeIsSuccess(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '1300', 'OrderID' => '42']);
+        $this->assertTrue($this->adapter($client)->registerDomain(new Registrar_Domain()));
     }
 
     public function testRegistrationRefusesAMissingCity(): void
@@ -153,6 +168,7 @@ XML;
         $this->assertTrue($this->adapter($client)->transferDomain(new Registrar_Domain($contact)));
         $body = $client->calls[0][2]['body'];
         $this->assertSame('epp-code', $body['AuthInfo1']);
+        $this->assertArrayNotHasKey('RegistrantFirstName', $body);
         $this->assertArrayNotHasKey('RegistrantCity', $body);
         $this->assertArrayNotHasKey('RegistrantStateProvince', $body);
         $this->assertArrayNotHasKey('RegistrantPostalCode', $body);
@@ -189,5 +205,27 @@ XML;
         $this->assertSame('ns2.nested.example', $domain->nameservers[2]);
         $this->assertSame('Registered', $domain->status);
         $this->assertSame(strtotime('10/17/2027 9:43:20 PM'), $domain->expirationTime);
+    }
+
+    public function testTransferPendingConsentIsSuccess(): void
+    {
+        $xml = <<<'XML'
+<?xml version="1.0"?>
+<interface-response>
+ <transferorder>
+  <transferorderid>445413</transferorderid>
+  <statusid>4</statusid>
+  <statusdesc>Processing</statusdesc>
+  <transferorderdetail>
+   <statusid>100</statusid>
+   <statusdesc>Pending consent</statusdesc>
+  </transferorderdetail>
+ </transferorder>
+ <ErrCount>0</ErrCount>
+ <Done>true</Done>
+</interface-response>
+XML;
+        $client = new FakeEnomClient([$xml]);
+        $this->assertTrue($this->adapter($client)->transferDomain(new Registrar_Domain()));
     }
 }

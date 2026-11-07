@@ -2,7 +2,7 @@
 
 Enom reseller adapter for [FOSSBilling](https://fossbilling.org). FOSSBilling does not ship an Enom adapter. This one registers, transfers, renews, and syncs domains through Enom's reseller API.
 
-The reseller UID and password are entered in the registrar form and stored by FOSSBilling. They are not in this repository. The tests replay recorded responses and do not call Enom.
+The reseller UID and API token are entered in the registrar form and stored by FOSSBilling. They are not in this repository. The tests replay recorded responses and do not call Enom.
 
 Built and maintained by [TAJHOST](https://tajhost.com).
 
@@ -31,7 +31,7 @@ Installation is manual. FOSSBilling's extension installer does not place a domai
 
 1. Copy `src/library/Registrar/Adapter/Enom.php` from this repository to the same path inside FOSSBilling: `src/library/Registrar/Adapter/Enom.php`.
 2. In the admin panel, go to **System → Domain registration → Registrars → Enom → Install**.
-3. Enter the reseller UID and password. Use FOSSBilling's test mode when the account is an OTE account.
+3. Enter the reseller UID and API token. Use FOSSBilling's test mode when the account is an OTE account.
 
 ### Manually from the release archive
 
@@ -46,7 +46,7 @@ Go to **System → Domain registration → Registrars → Enom**.
 | Field | Description |
 |---|---|
 | Enom UID | Reseller account ID (the login username). Required. |
-| Enom PW | API password. Required. It is not written to logs. Requests are sent as a POST body, so the password is not placed in the URL. |
+| Enom API token | The `pw` value from the Enom account. Required. It is not written to logs. Requests are sent as a POST body, so the token is not placed in the URL. Enom's docs show the token in the query string and do not document POST. This release stays blocked until a read-only POST `GetBalance` check, or the OTE test, succeeds. |
 
 FOSSBilling's **Enable Test Mode** sends commands to `https://resellertest.enom.com/interface.asp`. There is no separate sandbox checkbox.
 
