@@ -250,6 +250,143 @@ XML;
             date_default_timezone_set($previous);
         }
     }
+
+    public function testAvailabilityAcceptsAnIndexedRrpCode(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'DomainName1' => 'free.example', 'RRPCode1' => '210']);
+        $this->assertTrue($this->adapter($client)->isDomainAvailable(enom_test_domain()));
+    }
+
+    public function testAvailabilityAcceptsAnIndexedTakenCode(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'DomainName1' => 'taken.example', 'RRPCode1' => '211']);
+        $this->assertFalse($this->adapter($client)->isDomainAvailable(enom_test_domain()));
+    }
+
+    public function testPurchaseWithoutNameserversUsesEnomDefaultDns(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $domain = enom_test_domain();
+        $domain->setNs1('');
+        $domain->setNs2('');
+        $domain->setNs3('');
+        $domain->setNs4('');
+        $this->assertTrue($this->adapter($client)->registerDomain($domain));
+        $body = $client->calls[0][2]['body'];
+        $this->assertSame('default', $body['UseDNS']);
+        $this->assertArrayNotHasKey('NS1', $body);
+    }
+
+    public function testPurchaseWithNameserversDoesNotSendUseDns(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $domain = enom_test_domain();
+        $domain->setNs1('ns1.example.net');
+        $domain->setNs2('ns2.example.net');
+        $this->assertTrue($this->adapter($client)->registerDomain($domain));
+        $body = $client->calls[0][2]['body'];
+        $this->assertSame('ns1.example.net', $body['NS1']);
+        $this->assertArrayNotHasKey('UseDNS', $body);
+    }
+
+    public function testNameserverRequestOmitsEmptySlots(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $domain = enom_test_domain();
+        $domain->setNs1('ns1.example.net');
+        $domain->setNs2('ns2.example.net');
+        $this->assertTrue($this->adapter($client)->modifyNs($domain));
+        $body = $client->calls[0][2]['body'];
+        $this->assertSame('ns1.example.net', $body['NS1']);
+        $this->assertSame('ns2.example.net', $body['NS2']);
+        $this->assertArrayNotHasKey('NS3', $body);
+        $this->assertArrayNotHasKey('NS4', $body);
+    }
+
+    public function testModifyNsRefusesAnEmptyNameserverList(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true']);
+        $domain = enom_test_domain();
+        $domain->setNs1('');
+        $domain->setNs2('');
+        try {
+            $this->adapter($client)->modifyNs($domain);
+            $this->fail('modifyNs with no nameservers must throw');
+        } catch (Registrar_Exception $e) {
+            $this->assertStringContainsString('At least one nameserver is required', $e->getMessage());
+        }
+        $this->assertSame([], $client->calls, 'no request may reach Enom');
+    }
+
+    public function testTransferUppercasesTheCountryCode(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200', 'TransferOrderID' => '91']);
+        $this->adapter($client)->transferDomain(enom_test_domain(enom_test_contact(['country' => 'ae'])));
+        $this->assertSame('AE', $client->calls[0][2]['body']['RegistrantCountry']);
+    }
+
+    public function testGetEppReturnsTheAuthCode(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'AuthCode' => '  ABC123  ']);
+        $this->assertSame('ABC123', $this->adapter($client)->getEpp(enom_test_domain()));
+    }
+
+    public function testGetEppExplainsTheManualAlternativesWhenEnomRefuses(): void
+    {
+        $client = $this->body(['ErrCount' => '1', 'Err1' => 'Command not found']);
+        $log = new CapturingBoxLog();
+        $adapter = $this->adapter($client);
+        $adapter->setLog($log);
+        try {
+            $adapter->getEpp(enom_test_domain());
+            $this->fail('getEpp must throw when Enom refuses GetAuthCode');
+        } catch (Registrar_Exception $e) {
+            $this->assertClientAuthCodeFailure($e, $log, 'Command not found');
+        }
+    }
+
+    public function testGetEppExplainsTheManualAlternativesWhenNoCodeIsReturned(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true']);
+        $log = new CapturingBoxLog();
+        $adapter = $this->adapter($client);
+        $adapter->setLog($log);
+        try {
+            $adapter->getEpp(enom_test_domain());
+            $this->fail('getEpp must throw when GetAuthCode returns no code');
+        } catch (Registrar_Exception $e) {
+            $this->assertClientAuthCodeFailure($e, $log, 'no auth code');
+        }
+    }
+
+    private function assertClientAuthCodeFailure(Registrar_Exception $e, CapturingBoxLog $log, string $staffDetail): void
+    {
+        $message = $e->getMessage();
+        $this->assertSame(
+            'The transfer (auth) code could not be retrieved automatically. Please contact support to receive it.',
+            $message
+        );
+        $this->assertStringNotContainsString('Enom', $message);
+        $this->assertStringNotContainsString('SynchAuthInfo', $message);
+        $this->assertSame(3004, $e->getCode());
+        $line = implode("\n", $log->errors);
+        $this->assertStringNotContainsString('ada@example.com', $line);
+        $this->assertStringNotContainsString('fixture-pass', $line);
+        $this->assertStringContainsString('examplecom', $line);
+        $this->assertStringContainsString($staffDetail, $line);
+        $this->assertStringContainsString('Retrieve it in the Enom control panel or send it with SynchAuthInfo', $line);
+    }
+}
+
+final class CapturingBoxLog extends Box_Log
+{
+    /** @var list<string> */
+    public array $errors = [];
+
+    public function err(string $message): void
+    {
+        $this->errors[] = $message;
+    }
 }
 
 final class EnomStatusDomain extends Registrar_Domain

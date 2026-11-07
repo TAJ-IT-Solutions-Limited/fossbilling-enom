@@ -44,6 +44,8 @@ function enom_test_domain(?Registrar_Domain_Contact $contact = null): Registrar_
     $domain->setSld('example');
     $domain->setTld('com');
     $domain->setEpp('epp-code');
+    $domain->setNs1('ns1.example.net');
+    $domain->setNs2('ns2.example.net');
     $domain->setContactRegistrar($contact ?? enom_test_contact());
 
     return $domain;

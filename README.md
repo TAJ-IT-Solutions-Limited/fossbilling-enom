@@ -12,9 +12,9 @@ Built and maintained by [TAJHOST](https://tajhost.com).
 - Registration (`Purchase`) using the client profile as the registrant contact.
 - Inbound transfer (`TP_CreateOrder`) with the auth (EPP) code.
 - Renewal (`Extend`).
-- Expiry and registration-date sync (`GetDomainInfo`).
-- Nameserver updates (`ModifyNS`).
-- Auth-code retrieval (`GetAuthCode`).
+- Expiry sync (`GetDomainInfo`). A registration date is written only when Enom returns one, which it currently does not — see "Known gaps".
+- Nameserver updates (`ModifyNS`). Empty slots are omitted, and a request with no nameservers is refused.
+- Auth-code retrieval (`GetAuthCode`), with an actionable error when Enom refuses the command.
 - Replies may be Enom's key=value text (including the `;URL Interface` preamble), XML, HTML, or JSON. A reply with no `ErrCount` is rejected. An Enom error is returned as the registrar error text.
 
 ## Requirements
@@ -23,7 +23,7 @@ Built and maintained by [TAJHOST](https://tajhost.com).
 - PHP 8.2 or newer.
 - An Enom reseller account, with the billing server's public IP allowed in Enom's API settings.
 
-Upgrading from 1.0.0 or 1.0.1: replace the single `Enom.php` file. The old sandbox checkbox is gone. Use FOSSBilling test mode. An Enom API token is recommended instead of the account password.
+Upgrading from 1.0.0, 1.0.1 or 1.0.2: replace the single `Enom.php` file. The old sandbox checkbox is gone. Use FOSSBilling test mode. An Enom API token is recommended instead of the account password.
 
 ## Installation
 
@@ -37,8 +37,8 @@ Installation is manual. FOSSBilling's extension installer does not place a domai
 
 ### Manually from the release archive
 
-1. Download `fossbilling-enom-1.0.2.zip` from the [v1.0.2 release](https://github.com/TAJ-IT-Solutions-Limited/fossbilling-enom/releases/tag/v1.0.2).
-2. The archive has no wrapper folder. `Enom.php` is already at `src/library/Registrar/Adapter/Enom.php` inside the zip. Copy that file to `library/Registrar/Adapter/Enom.php` in the FOSSBilling installation (`src/library/...` for a source checkout).
+1. Download `fossbilling-enom-1.0.3.zip` from the [v1.0.3 release](https://github.com/TAJ-IT-Solutions-Limited/fossbilling-enom/releases/tag/v1.0.3).
+2. The archive has no wrapper folder. Copy `src/library/Registrar/Adapter/Enom.php` to `library/Registrar/Adapter/Enom.php` in a packaged FOSSBilling installation (`src/library/Registrar/Adapter/Enom.php` for a source checkout). README, CHANGELOG, LICENSE, and the other documentation are under `docs/` so extracting the zip at the FOSSBilling root does not overwrite core files.
 3. In the admin panel, go to **System → Domain registration → Registrars → Enom → Install**.
 
 ## Configuration
@@ -48,7 +48,7 @@ Go to **System → Domain registration → Registrars → Enom**.
 | Field | Description |
 |---|---|
 | Enom UID | Reseller account ID (the login username). Required. |
-| Enom API token | The `pw` value from the Enom account. Required. It is not written to logs. Requests are sent as a POST body (verified against the live Enom API), so the token is never in the URL. |
+| Enom API token | The `pw` value from the Enom account. Required. It is not written to logs. Requests are sent as a POST body (verified against the live Enom API for `GetBalance`, `Check`, `GetDomainInfo` and a real `Extend`; the other write commands are covered by recorded-response tests. `docs/ote-checklist.md` lists the OTE run to do when test access is available), so the token is never in the URL. |
 
 FOSSBilling's **Enable Test Mode** sends commands to `https://resellertest.enom.com/interface.asp`. There is no separate sandbox checkbox.
 
@@ -78,15 +78,26 @@ history -c
 | Register | `Purchase` | Registrant fields are taken from the client profile |
 | Transfer | `TP_CreateOrder` | Requires the auth (EPP) code |
 | Renew | `Extend` | Uses the registration period on the order |
-| Sync details | `GetDomainInfo` | XML reply. Expiry is read from `ExpiryDate`, or from `status > expiration`. Nameservers are read from `services/entry[name=dnsserver]/configuration/dns`. An empty registration date does not clear one already stored. |
-| Nameservers | `ModifyNS` | Up to four nameservers |
-| Auth code | `GetAuthCode` | Returned to FOSSBilling as the EPP code |
+| Sync details | `GetDomainInfo` | XML reply. Expiry is read from `ExpiryDate`, or from `status > expiration`. Nameservers are read from `services/entry[name=dnsserver]/configuration/dns` and set on the domain object; FOSSBilling 0.8.x does not persist them yet (see "Known gaps"). |
+| Nameservers | `ModifyNS` | Up to four nameservers; empty slots are omitted |
+| Auth code | `GetAuthCode` | Returned to FOSSBilling as the EPP code. When it cannot be retrieved, the client sees a contact-support message and error code `3004`. Staff see the details in the log |
 
 ## Known limitations
 
 - **No premium domains.** The adapter does not request or price premium names. A premium result from `Check` is not turned into a special price.
 - **Contacts come from the client profile.** Registration sends the registrant name, email, address, and phone from that profile. Changing the contact later is not implemented.
 - **Not implemented:** domain deletion, WHOIS privacy, and registry lock or unlock. Those actions return a clear registrar error.
+
+## Known gaps
+
+These are limitations of the FOSSBilling core or of Enom's API, not of the adapter. They are listed so nobody has to rediscover them in production.
+
+| Gap | Why | Workaround |
+|---|---|---|
+| `registered_at` is cleared on every sync | `ServiceDomain\Service::syncWhois()` writes `formatRegistrarTimestamp($whois->getRegistrationTime())` unconditionally, and Enom's `GetDomainInfo` has no creation date, so the adapter returns `null` and the stored date is overwritten with `null`. | Proposed upstream fix only, in `docs/fossbilling-core-registered-at.patch`. It is for FOSSBilling maintainers. Do not apply it to a production billing install from this package. Reported upstream as [FOSSBilling#4656](https://github.com/FOSSBilling/FOSSBilling/issues/4656). |
+| Nameservers are not persisted from a sync | The adapter fills `setNs1()`…`setNs4()`, but `syncWhois()` never reads them. Delegation changes made in the Enom control panel therefore stay invisible in FOSSBilling. | Update nameservers from FOSSBilling, which writes both sides. A core change would be needed before a sync can store them. Reported upstream as [FOSSBilling#4656](https://github.com/FOSSBilling/FOSSBilling/issues/4656). |
+| `GetAuthCode` coverage | Enom exposes the auth code over the API for some accounts and TLDs only; the command is not in Enom's public command catalog. | The client sees a contact-support message and error code `3004`. Staff see the provider error and the panel or `SynchAuthInfo` hint in the log. |
+| Write commands are not covered by the live check | `tools/live_readonly_check.php` refuses `Purchase`, `Extend`, `TP_CreateOrder` and `ModifyNS` by design, so those paths are only exercised against OTE. | Recorded-response tests in CI. Run `docs/ote-checklist.md` when OTE access is available. |
 
 ## Troubleshooting
 
@@ -97,6 +108,16 @@ The adapter returns Enom's `Err1` text as the registrar error.
 - **IP not whitelisted.** Enom rejected the call because the billing server's public IP is not in the account's API allow list. Add that IP in Enom's API settings. The request is sent by the FOSSBilling server, not by the visitor's browser.
 
 ## Changelog
+
+### 1.0.3
+
+- Availability also reads Enom's indexed keys (`RRPCode1`, `Available1`).
+- Nameserver requests omit empty slots; a request with no nameservers is refused.
+- Transfers uppercase the registrant country.
+- A refused `GetAuthCode` tells the client to contact support and returns error code `3004`. Staff see the details in the log.
+- CI lints every PHP file and runs `composer validate`.
+- A purchase with no nameservers sends `UseDNS=default`, because Enom requires `UseDNS` or `NSx`.
+- Corrects two 1.0.2 notes (registration-date and nameserver persistence depend on FOSSBilling core, see Known gaps).
 
 ### 1.0.2 — Security and reliability update. All users should upgrade.
 

@@ -1,0 +1,73 @@
+Proposed upstream fix — do not apply this to a production billing install
+==========================================================================
+
+This file is a proposal for FOSSBilling maintainers. Shipping it here does not
+mean a billing server should apply it.
+
+Applies to: FOSSBilling 0.8.x (checked against 0.8.9)
+Upstream issue: https://github.com/FOSSBilling/FOSSBilling/issues/4656
+
+Why
+---
+`ServiceDomain\Service::syncWhois()` writes both dates unconditionally:
+
+    $model->expires_at    = $this->formatRegistrarTimestamp($whois->getExpirationTime());
+    $model->registered_at = $this->formatRegistrarTimestamp($whois->getRegistrationTime());
+
+Registrar adapters that cannot report a creation date (Enom's `GetDomainInfo`
+does not return one, and `_getD()` never populates
+`Registrar_Domain::setRegistrationTime()`) hand back `null`, which is then
+written over a date FOSSBilling already knew. Every cron sync therefore wipes
+`service_domain.registered_at`.
+
+A registrar adapter cannot fix this on its own: it never receives the stored
+value, and it does not control what the core writes.
+
+Patch
+-----
+--- a/src/modules/Servicedomain/Service.php
++++ b/src/modules/Servicedomain/Service.php
+@@ -403,8 +403,17 @@
+         $model->contact_phone = $contact->getTel();
+         $model->details = serialize($whois);
+-        $model->expires_at = $this->formatRegistrarTimestamp($whois->getExpirationTime());
+-        $model->registered_at = $this->formatRegistrarTimestamp($whois->getRegistrationTime());
++        // Only overwrite a stored date when the registrar actually returned one.
++        // Registrars such as Enom do not expose a creation date, and writing null
++        // here would erase a date that was already known.
++        $expiresAt = $this->formatRegistrarTimestamp($whois->getExpirationTime());
++        if ($expiresAt !== null) {
++            $model->expires_at = $expiresAt;
++        }
++        $registeredAt = $this->formatRegistrarTimestamp($whois->getRegistrationTime());
++        if ($registeredAt !== null) {
++            $model->registered_at = $registeredAt;
++        }
+         $model->synced_at = date('Y-m-d H:i:s');
+         $model->updated_at = date('Y-m-d H:i:s');
+         $this->di['db']->store($model);
+
+Same idea for nameservers
+-------------------------
+`syncWhois()` never reads `$whois->getNs1()`…`getNs4()`, so an adapter cannot
+report a delegation change. If you want panel-side nameserver changes to show
+up in FOSSBilling, add after the contact block:
+
+    foreach ([1, 2, 3, 4] as $slot) {
+        $value = $whois->{'getNs' . $slot}();
+        if (is_string($value) && $value !== '') {
+            $model->{'ns' . $slot} = $value;
+        }
+    }
+
+Note that `Model_ServiceDomain::$ns1`…`ns4` are written by
+`updateNameservers()` on the FOSSBilling side, so only overwrite them when the
+registrar returned a value.
+
+Verification
+------------
+1. Register or import a domain, set `registered_at` in `service_domain`.
+2. Run the domain sync (admin *Sync* or the cron task).
+3. Before the patch: `registered_at` becomes `NULL`. After: it is unchanged
+   when the registrar reports no creation date, and it is updated when the
+   registrar does report one.

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.3
+
+- Availability: reads Enom's indexed keys (`RRPCode1`, `Available1`) as well as the plain ones, so an account that always indexes cannot make every name look taken.
+- Nameservers: empty slots are no longer sent (`NS3=` / `NS4=`); `modifyNs` refuses a request that has no nameservers at all, so an empty delegation can never reach the registry.
+- Transfers: the registrant country is uppercased, matching the registration path.
+- Auth code: when the code cannot be retrieved, the client sees a contact-support message and error code `3004`. Staff see the provider error and the panel or `SynchAuthInfo` hint in the log.
+- CI: lint every PHP file and run `composer validate`, in addition to PHPUnit.
+- A purchase with no nameservers sends `UseDNS=default`, because Enom requires `UseDNS` or `NSx`.
+- Corrects two 1.0.2 notes (registration-date and nameserver persistence depend on FOSSBilling core, see Known gaps).
+
 ## 1.0.2 — Security and reliability update. All users should upgrade.
 
 - Credentials are sent in the POST body, never in the URL.
