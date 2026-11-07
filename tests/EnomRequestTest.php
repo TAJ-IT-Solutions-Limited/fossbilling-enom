@@ -267,6 +267,10 @@ XML;
     {
         $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
         $domain = enom_test_domain();
+        $domain->setNs1('');
+        $domain->setNs2('');
+        $domain->setNs3('');
+        $domain->setNs4('');
         $this->assertTrue($this->adapter($client)->registerDomain($domain));
         $body = $client->calls[0][2]['body'];
         $this->assertSame('default', $body['UseDNS']);
