@@ -334,22 +334,58 @@ XML;
     public function testGetEppExplainsTheManualAlternativesWhenEnomRefuses(): void
     {
         $client = $this->body(['ErrCount' => '1', 'Err1' => 'Command not found']);
+        $log = new CapturingBoxLog();
+        $adapter = $this->adapter($client);
+        $adapter->setLog($log);
         try {
-            $this->adapter($client)->getEpp(enom_test_domain());
+            $adapter->getEpp(enom_test_domain());
             $this->fail('getEpp must throw when Enom refuses GetAuthCode');
         } catch (Registrar_Exception $e) {
-            $this->assertStringContainsString('control panel', $e->getMessage());
-            $this->assertStringContainsString('SynchAuthInfo', $e->getMessage());
-            $this->assertSame(3004, $e->getCode());
+            $this->assertClientAuthCodeFailure($e, $log, 'Command not found');
         }
     }
 
     public function testGetEppExplainsTheManualAlternativesWhenNoCodeIsReturned(): void
     {
         $client = $this->body(['ErrCount' => '0', 'Done' => 'true']);
-        $this->expectException(Registrar_Exception::class);
-        $this->expectExceptionMessage('returned no auth code');
-        $this->adapter($client)->getEpp(enom_test_domain());
+        $log = new CapturingBoxLog();
+        $adapter = $this->adapter($client);
+        $adapter->setLog($log);
+        try {
+            $adapter->getEpp(enom_test_domain());
+            $this->fail('getEpp must throw when GetAuthCode returns no code');
+        } catch (Registrar_Exception $e) {
+            $this->assertClientAuthCodeFailure($e, $log, 'no auth code');
+        }
+    }
+
+    private function assertClientAuthCodeFailure(Registrar_Exception $e, CapturingBoxLog $log, string $staffDetail): void
+    {
+        $message = $e->getMessage();
+        $this->assertSame(
+            'The transfer (auth) code could not be retrieved automatically. Please contact support to receive it.',
+            $message
+        );
+        $this->assertStringNotContainsString('Enom', $message);
+        $this->assertStringNotContainsString('SynchAuthInfo', $message);
+        $this->assertSame(3004, $e->getCode());
+        $line = implode("\n", $log->errors);
+        $this->assertStringNotContainsString('ada@example.com', $line);
+        $this->assertStringNotContainsString('fixture-pass', $line);
+        $this->assertStringContainsString('examplecom', $line);
+        $this->assertStringContainsString($staffDetail, $line);
+        $this->assertStringContainsString('Retrieve it in the Enom control panel or send it with SynchAuthInfo', $line);
+    }
+}
+
+final class CapturingBoxLog extends Box_Log
+{
+    /** @var list<string> */
+    public array $errors = [];
+
+    public function err(string $message): void
+    {
+        $this->errors[] = $message;
     }
 }
 

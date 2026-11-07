@@ -48,7 +48,7 @@ Go to **System → Domain registration → Registrars → Enom**.
 | Field | Description |
 |---|---|
 | Enom UID | Reseller account ID (the login username). Required. |
-| Enom API token | The `pw` value from the Enom account. Required. It is not written to logs. Requests are sent as a POST body (verified against the live Enom API for the read-only commands; the write commands are verified against OTE before each release, see `docs/ote-checklist.md`), so the token is never in the URL. |
+| Enom API token | The `pw` value from the Enom account. Required. It is not written to logs. Requests are sent as a POST body (verified against the live Enom API for `GetBalance`, `Check`, `GetDomainInfo` and a real `Extend`; the other write commands are covered by recorded-response tests. `docs/ote-checklist.md` lists the OTE run to do when test access is available), so the token is never in the URL. |
 
 FOSSBilling's **Enable Test Mode** sends commands to `https://resellertest.enom.com/interface.asp`. There is no separate sandbox checkbox.
 
@@ -80,7 +80,7 @@ history -c
 | Renew | `Extend` | Uses the registration period on the order |
 | Sync details | `GetDomainInfo` | XML reply. Expiry is read from `ExpiryDate`, or from `status > expiration`. Nameservers are read from `services/entry[name=dnsserver]/configuration/dns` and set on the domain object; FOSSBilling 0.8.x does not persist them yet (see "Known gaps"). |
 | Nameservers | `ModifyNS` | Up to four nameservers; empty slots are omitted |
-| Auth code | `GetAuthCode` | Returned to FOSSBilling as the EPP code. When Enom refuses, the client sees an actionable message and error code `3004` |
+| Auth code | `GetAuthCode` | Returned to FOSSBilling as the EPP code. When it cannot be retrieved, the client sees a contact-support message and error code `3004`. Staff see the details in the log |
 
 ## Known limitations
 
@@ -94,10 +94,10 @@ These are limitations of the FOSSBilling core or of Enom's API, not of the adapt
 
 | Gap | Why | Workaround |
 |---|---|---|
-| `registered_at` is cleared on every sync | `ServiceDomain\Service::syncWhois()` writes `formatRegistrarTimestamp($whois->getRegistrationTime())` unconditionally, and Enom's `GetDomainInfo` has no creation date, so the adapter returns `null` and the stored date is overwritten with `null`. | Proposed upstream fix only, in `docs/fossbilling-core-registered-at.patch`. It is for FOSSBilling maintainers. Do not apply it to a production billing install from this package. |
-| Nameservers are not persisted from a sync | The adapter fills `setNs1()`…`setNs4()`, but `syncWhois()` never reads them. Delegation changes made in the Enom control panel therefore stay invisible in FOSSBilling. | Update nameservers from FOSSBilling, which writes both sides. A core change would be needed before a sync can store them. |
-| `GetAuthCode` coverage | Enom exposes the auth code over the API for some accounts and TLDs only; the command is not in Enom's public command catalog. | The error tells the client or staff to use the Enom control panel, or to send the code with `SynchAuthInfo`. |
-| Write commands are not covered by the live check | `tools/live_readonly_check.php` refuses `Purchase`, `Extend`, `TP_CreateOrder` and `ModifyNS` by design, so those paths are only exercised against OTE. | Run `docs/ote-checklist.md` before tagging a release. |
+| `registered_at` is cleared on every sync | `ServiceDomain\Service::syncWhois()` writes `formatRegistrarTimestamp($whois->getRegistrationTime())` unconditionally, and Enom's `GetDomainInfo` has no creation date, so the adapter returns `null` and the stored date is overwritten with `null`. | Proposed upstream fix only, in `docs/fossbilling-core-registered-at.patch`. It is for FOSSBilling maintainers. Do not apply it to a production billing install from this package. Reported upstream as [FOSSBilling#4656](https://github.com/FOSSBilling/FOSSBilling/issues/4656). |
+| Nameservers are not persisted from a sync | The adapter fills `setNs1()`…`setNs4()`, but `syncWhois()` never reads them. Delegation changes made in the Enom control panel therefore stay invisible in FOSSBilling. | Update nameservers from FOSSBilling, which writes both sides. A core change would be needed before a sync can store them. Reported upstream as [FOSSBilling#4656](https://github.com/FOSSBilling/FOSSBilling/issues/4656). |
+| `GetAuthCode` coverage | Enom exposes the auth code over the API for some accounts and TLDs only; the command is not in Enom's public command catalog. | The client sees a contact-support message and error code `3004`. Staff see the provider error and the panel or `SynchAuthInfo` hint in the log. |
+| Write commands are not covered by the live check | `tools/live_readonly_check.php` refuses `Purchase`, `Extend`, `TP_CreateOrder` and `ModifyNS` by design, so those paths are only exercised against OTE. | Recorded-response tests in CI. Run `docs/ote-checklist.md` when OTE access is available. |
 
 ## Troubleshooting
 
@@ -114,8 +114,7 @@ The adapter returns Enom's `Err1` text as the registrar error.
 - Availability also reads Enom's indexed keys (`RRPCode1`, `Available1`).
 - Nameserver requests omit empty slots; a request with no nameservers is refused.
 - Transfers uppercase the registrant country.
-- A refused `GetAuthCode` returns an actionable message and error code `3004`.
-- README corrected: the registration date and the nameserver sync need a core change (see "Known gaps").
+- A refused `GetAuthCode` tells the client to contact support and returns error code `3004`. Staff see the details in the log.
 - CI lints every PHP file and runs `composer validate`.
 - A purchase with no nameservers sends `UseDNS=default`, because Enom requires `UseDNS` or `NSx`.
 - Corrects two 1.0.2 notes (registration-date and nameserver persistence depend on FOSSBilling core, see Known gaps).

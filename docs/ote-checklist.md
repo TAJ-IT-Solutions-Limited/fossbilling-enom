@@ -4,7 +4,7 @@
 `GetDomainInfo` by design. That means the write paths — the ones that cost money
 and change a customer's domain — are never exercised by CI. Run this list on
 `resellertest.enom.com` (FOSSBilling **Enable Test Mode** on the Enom registrar)
-before every release, and record the date and the result in the release notes.
+whenever OTE access is available, and record the date and the result in the release notes.
 
 Do not run this against the production account.
 

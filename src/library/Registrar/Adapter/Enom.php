@@ -334,11 +334,13 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
      * Retrieve the transfer (auth) code from Enom.
      *
      * Only the documented GetAuthCode command is used. Enom does not expose the auth
-     * code over the API for every account or TLD, so a failure is reported with the
-     * actions a human can take instead of a bare "command failed".
+     * code over the API for every account or TLD. The client sees a support message.
+     * The domain name, the provider error, and the staff hint stay in the log.
      */
     public function getEpp(Registrar_Domain $domain): string
     {
+        $clientMessage = 'The transfer (auth) code could not be retrieved automatically. Please contact support to receive it.';
+
         try {
             $data = $this->_makeRequest('GetAuthCode', [
                 'SLD' => $domain->getSld(),
@@ -346,15 +348,12 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
                 'EndUserIP' => $this->_endUserIp(),
             ]);
         } catch (Registrar_Exception $e) {
-            $this->getLog()->err('Enom GetAuthCode failed for ' . $domain->getName() . ': ' . $e->getMessage());
-
-            throw new Registrar_Exception(
-                'Enom did not return an auth code for this domain (GetAuthCode refused: :reason). '
-                . 'Retrieve it in the Enom control panel, or send it to the registrant with the '
-                . 'SynchAuthInfo command.',
-                [':reason' => $e->getMessage()],
-                3004
+            $this->getLog()->err(
+                'Enom GetAuthCode failed for ' . $domain->getName() . ': ' . $e->getMessage()
+                . '. Retrieve it in the Enom control panel or send it with SynchAuthInfo.'
             );
+
+            throw new Registrar_Exception($clientMessage, null, 3004);
         }
 
         $auth = $this->_firstKey($data, ['AuthCode', 'AuthInfo', 'authinfo', 'GetAuthCode']);
@@ -362,12 +361,12 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             return trim($auth);
         }
 
-        throw new Registrar_Exception(
-            'Enom accepted GetAuthCode but returned no auth code. Retrieve it in the Enom control panel, '
-            . 'or send it to the registrant with the SynchAuthInfo command.',
-            null,
-            3004
+        $this->getLog()->err(
+            'Enom GetAuthCode returned no auth code for ' . $domain->getName()
+            . '. Retrieve it in the Enom control panel or send it with SynchAuthInfo.'
         );
+
+        throw new Registrar_Exception($clientMessage, null, 3004);
     }
 
     /**

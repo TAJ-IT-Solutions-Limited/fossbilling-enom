@@ -5,6 +5,7 @@ This file is a proposal for FOSSBilling maintainers. Shipping it here does not
 mean a billing server should apply it.
 
 Applies to: FOSSBilling 0.8.x (checked against 0.8.9)
+Upstream issue: https://github.com/FOSSBilling/FOSSBilling/issues/4656
 
 Why
 ---
