@@ -19,9 +19,11 @@ Built and maintained by [TAJHOST](https://tajhost.com).
 
 ## Requirements
 
-- FOSSBilling **0.8.0** or newer.
+- FOSSBilling 0.8.x.
 - PHP 8.2 or newer.
 - An Enom reseller account, with the billing server's public IP allowed in Enom's API settings.
+
+Upgrading from 1.0.0 or 1.0.1: replace the single `Enom.php` file. The old sandbox checkbox is gone. Use FOSSBilling test mode. An Enom API token is recommended instead of the account password.
 
 ## Installation
 
@@ -35,7 +37,7 @@ Installation is manual. FOSSBilling's extension installer does not place a domai
 
 ### Manually from the release archive
 
-1. Download `fossbilling-enom-1.0.1.zip` from the [Releases](https://github.com/TAJ-IT-Solutions-Limited/fossbilling-enom/releases/tag/v1.0.1) page.
+1. Download `fossbilling-enom-1.0.2.zip` from the [v1.0.2 release](https://github.com/TAJ-IT-Solutions-Limited/fossbilling-enom/releases/tag/v1.0.2).
 2. The archive has no wrapper folder. `Enom.php` is already at `src/library/Registrar/Adapter/Enom.php` inside the zip. Copy that file to the same path in the FOSSBilling installation.
 3. In the admin panel, go to **System → Domain registration → Registrars → Enom → Install**.
 
@@ -46,13 +48,15 @@ Go to **System → Domain registration → Registrars → Enom**.
 | Field | Description |
 |---|---|
 | Enom UID | Reseller account ID (the login username). Required. |
-| Enom API token | The `pw` value from the Enom account. Required. It is not written to logs. Requests are sent as a POST body, so the token is not placed in the URL. Enom's docs show the token in the query string and do not document POST. This release stays blocked until a read-only POST `GetBalance` check, or the OTE test, succeeds. |
+| Enom API token | The `pw` value from the Enom account. Required. It is not written to logs. Requests are sent as a POST body (verified against the live Enom API), so the token is never in the URL. |
 
 FOSSBilling's **Enable Test Mode** sends commands to `https://resellertest.enom.com/interface.asp`. There is no separate sandbox checkbox.
 
 In the Enom account, open the API settings and whitelist the public IP of the server that runs FOSSBilling. Enom checks that server IP. The visitor's address is sent separately as `EndUserIP` and does not replace the whitelist.
 
-## Read-only live check
+## For developers (repository only, not in the release zip)
+
+### Read-only live check
 
 Simon runs this once on the billing server. It talks to the live Enom host only. The process can send `GetBalance`, `Check`, and `GetDomainInfo`. `Purchase`, `Extend`, `TP_CreateOrder`, and `ModifyNS` are refused before a request is made.
 
@@ -95,6 +99,22 @@ The adapter returns Enom's `Err1` text as the registrar error.
 - **IP not whitelisted.** Enom rejected the call because the billing server's public IP is not in the account's API allow list. Add that IP in Enom's API settings. The request is sent by the FOSSBilling server, not by the visitor's browser.
 
 ## Changelog
+
+### 1.0.2
+
+- `getHttpClient()` returns `Symfony\Contracts\HttpClient\HttpClientInterface`, the same signature as FOSSBilling 0.8.9. The read-only check no longer defines its own registrar classes, so it cannot hide a signature mismatch.
+- The read-only check defines `DEBUG` as false before it loads FOSSBilling, and it does not include the billing `config.php`. A PHP error in the output includes the class and file line.
+- An Enom expiration such as `11/6/2027 7:34:00 PM` is stored as that calendar day. The clock time is not applied, so the billing timezone cannot move it to the next day.
+- `tools/live_readonly_check.php` calls only GetBalance, Check, and GetDomainInfo on the live host. Credentials stay in the environment.
+
+- Enom calls are POST bodies. The API token is not put in the URL. POST itself is not in the Enom docs, so release waits for a read-only check.
+- A response with no `ErrCount` is rejected instead of treated as success.
+- Purchase, Extend, TP_CreateOrder, and ModifyNS require `Done=true` when that field is present. `RRPCode` 200, 210, and 1300 are success. 1300 is a queued registration.
+- A purchase always sends the full registrant set. An empty state uses the client city. Countries AE, HK, and QA with no postal code send `POSTAL_CODE_NONE` (`00000`), which OTE still has to confirm. Ireland is not in that list.
+- A transfer sends the registrant block only when every core field is already present. `statusid` 100 or "Pending consent" is success.
+- Transfers send `OrderType`, `DomainCount`, and indexed `SLD1` / `TLD1` / `AuthInfo1`.
+- `GetDomainInfo` asks for XML and reads nameservers from the documented `dnsserver` entries.
+- The registrar form no longer has its own sandbox checkbox. FOSSBilling test mode selects the OTE host.
 
 ### 1.0.1
 
