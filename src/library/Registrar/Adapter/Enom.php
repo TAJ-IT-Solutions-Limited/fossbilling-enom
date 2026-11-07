@@ -16,7 +16,7 @@ declare(strict_types=1);
  */
 class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
 {
-    public const ADAPTER_BUILD = '2026-11-07-enom-post-fail-closed';
+    public const ADAPTER_BUILD = '2026-11-07-enom-1.0.3';
 
     /**
      * Sent only for countries that have no postal-code system.
@@ -139,14 +139,17 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             'TLD' => $tld,
         ]);
 
-        if (isset($data['RRPCode'])) {
-            $code = (int) $data['RRPCode'];
-
-            return $code === 210;
+        // Enom suffixes the keys (RRPCode1, Available1) only when several domains are
+        // checked in one call, but some accounts index even a single-domain reply.
+        // Read both shapes so availability never silently reports "not available".
+        $code = $this->_firstKey($data, ['RRPCode', 'RRPCode1']);
+        if ($code !== null) {
+            return (int) $code === 210;
         }
 
-        if (isset($data['Available'])) {
-            return filter_var($data['Available'], FILTER_VALIDATE_BOOLEAN);
+        $available = $this->_firstKey($data, ['Available', 'Available1']);
+        if ($available !== null) {
+            return filter_var($available, FILTER_VALIDATE_BOOLEAN);
         }
 
         return false;
@@ -302,13 +305,20 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
      */
     public function modifyNs(Registrar_Domain $domain): bool
     {
+        $ns = $this->_nameserverParams($domain);
+        if ($ns === []) {
+            // Never send an empty delegation request: Enom documents an empty NS1 as
+            // "no name servers", which would take the domain out of the DNS.
+            throw new Registrar_Exception('At least one nameserver is required to update the delegation');
+        }
+
         $params = array_merge(
             [
                 'SLD' => $domain->getSld(),
                 'TLD' => ltrim((string) $domain->getTld(false), '.'),
                 'EndUserIP' => $this->_endUserIp(),
             ],
-            $this->_nameserverParams($domain)
+            $ns
         );
 
         $this->_assertDone($this->_makeRequest('ModifyNS', $params), 'ModifyNS');
@@ -318,21 +328,42 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
 
     /**
      * Retrieve the transfer (auth) code from Enom.
+     *
+     * Only the documented GetAuthCode command is used. Enom does not expose the auth
+     * code over the API for every account or TLD, so a failure is reported with the
+     * actions a human can take instead of a bare "command failed".
      */
     public function getEpp(Registrar_Domain $domain): string
     {
-        $data = $this->_makeRequest('GetAuthCode', [
-            'SLD' => $domain->getSld(),
-            'TLD' => ltrim((string) $domain->getTld(false), '.'),
-            'EndUserIP' => $this->_endUserIp(),
-        ]);
+        try {
+            $data = $this->_makeRequest('GetAuthCode', [
+                'SLD' => $domain->getSld(),
+                'TLD' => ltrim((string) $domain->getTld(false), '.'),
+                'EndUserIP' => $this->_endUserIp(),
+            ]);
+        } catch (Registrar_Exception $e) {
+            $this->getLog()->err('Enom GetAuthCode failed for ' . $domain . ': ' . $e->getMessage());
 
-        $auth = $this->_firstKey($data, ['AuthCode', 'AuthInfo', 'authinfo', 'GetAuthCode']);
-        if (is_string($auth) && $auth !== '') {
-            return $auth;
+            throw new Registrar_Exception(
+                'Enom did not return an auth code for this domain (GetAuthCode refused: :reason). '
+                . 'Retrieve it in the Enom control panel, or send it to the registrant with the '
+                . 'SynchAuthInfo command.',
+                [':reason' => $e->getMessage()],
+                3004
+            );
         }
 
-        throw new Registrar_Exception('Enom did not return an auth code for this domain');
+        $auth = $this->_firstKey($data, ['AuthCode', 'AuthInfo', 'authinfo', 'GetAuthCode']);
+        if (is_string($auth) && trim($auth) !== '') {
+            return trim($auth);
+        }
+
+        throw new Registrar_Exception(
+            'Enom accepted GetAuthCode but returned no auth code. Retrieve it in the Enom control panel, '
+            . 'or send it to the registrant with the SynchAuthInfo command.',
+            null,
+            3004
+        );
     }
 
     /**
@@ -804,7 +835,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             'RegistrantCity' => trim((string) $c->getCity()),
             'RegistrantStateProvince' => trim((string) $c->getState()),
             'RegistrantPostalCode' => trim((string) $c->getZip()),
-            'RegistrantCountry' => trim((string) $c->getCountry()),
+            'RegistrantCountry' => strtoupper(trim((string) $c->getCountry())),
             'RegistrantPhone' => trim($this->_formatPhone($c)),
         ];
         foreach ($params as $value) {
@@ -999,7 +1030,13 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         return $tel;
     }
 
-    /** @return array<string, string> NS1..NS4 for Enom */
+    /**
+     * @return array<string, string> NS1..NS4 for Enom
+     *
+     * Empty slots are omitted. Enom documents an empty NS1 as "no name servers", so
+     * padding the request with NS3=/NS4= is at best ignored and at worst rejected by
+     * registries that validate the value.
+     */
     private function _nameserverParams(Registrar_Domain $domain): array
     {
         $out = [];
@@ -1013,8 +1050,8 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             static fn ($v) => is_string($v) && $v !== ''
         );
         $list = array_values($list);
-        for ($i = 0; $i < 4; ++$i) {
-            $out['NS' . ($i + 1)] = $list[$i] ?? '';
+        foreach (array_slice($list, 0, 4) as $index => $host) {
+            $out['NS' . ($index + 1)] = $host;
         }
 
         return $out;

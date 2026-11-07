@@ -17,7 +17,10 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           coverage: none
-      - run: php -l src/library/Registrar/Adapter/Enom.php
+      - name: Lint every PHP file
+        run: find src tests tools -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Validate composer.json
+        run: composer validate --strict --no-check-lock
       - run: composer update --no-interaction --prefer-dist
       - run: php tests/load_against_core.php
       - run: php tests/harness_start.php
