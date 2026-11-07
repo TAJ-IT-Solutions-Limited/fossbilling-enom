@@ -263,6 +263,28 @@ XML;
         $this->assertFalse($this->adapter($client)->isDomainAvailable(enom_test_domain()));
     }
 
+    public function testPurchaseWithoutNameserversUsesEnomDefaultDns(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $domain = enom_test_domain();
+        $this->assertTrue($this->adapter($client)->registerDomain($domain));
+        $body = $client->calls[0][2]['body'];
+        $this->assertSame('default', $body['UseDNS']);
+        $this->assertArrayNotHasKey('NS1', $body);
+    }
+
+    public function testPurchaseWithNameserversDoesNotSendUseDns(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $domain = enom_test_domain();
+        $domain->setNs1('ns1.example.net');
+        $domain->setNs2('ns2.example.net');
+        $this->assertTrue($this->adapter($client)->registerDomain($domain));
+        $body = $client->calls[0][2]['body'];
+        $this->assertSame('ns1.example.net', $body['NS1']);
+        $this->assertArrayNotHasKey('UseDNS', $body);
+    }
+
     public function testNameserverRequestOmitsEmptySlots(): void
     {
         $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);

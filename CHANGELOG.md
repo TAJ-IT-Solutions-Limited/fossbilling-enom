@@ -8,6 +8,8 @@
 - Auth code: a refused `GetAuthCode` now returns an actionable message (Enom control panel, or send it with `SynchAuthInfo`) and error code `3004`, instead of the raw Enom error.
 - Docs: corrected the 1.0.2 notes about the registration date and the nameserver sync. Neither can be fixed by the adapter alone — see "Known gaps" in the README and `docs/fossbilling-core-registered-at.patch`.
 - CI: lint every PHP file and run `composer validate`, in addition to PHPUnit.
+- A purchase with no nameservers sends `UseDNS=default`, because Enom requires `UseDNS` or `NSx`.
+- Corrects two 1.0.2 notes (registration-date and nameserver persistence depend on FOSSBilling core, see Known gaps).
 
 ## 1.0.2 — Security and reliability update. All users should upgrade.
 

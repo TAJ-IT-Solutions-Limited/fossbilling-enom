@@ -195,7 +195,11 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         }
 
         $ns = $this->_nameserverParams($domain);
-        $params = array_merge($params, $ns);
+        if ($ns === []) {
+            $params['UseDNS'] = 'default';
+        } else {
+            $params = array_merge($params, $ns);
+        }
 
         $this->_assertDone($this->_makeRequest('Purchase', $params), 'Purchase');
 
@@ -342,7 +346,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
                 'EndUserIP' => $this->_endUserIp(),
             ]);
         } catch (Registrar_Exception $e) {
-            $this->getLog()->err('Enom GetAuthCode failed for ' . $domain . ': ' . $e->getMessage());
+            $this->getLog()->err('Enom GetAuthCode failed for ' . $domain->getName() . ': ' . $e->getMessage());
 
             throw new Registrar_Exception(
                 'Enom did not return an auth code for this domain (GetAuthCode refused: :reason). '

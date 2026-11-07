@@ -38,7 +38,7 @@ Installation is manual. FOSSBilling's extension installer does not place a domai
 ### Manually from the release archive
 
 1. Download `fossbilling-enom-1.0.3.zip` from the [v1.0.3 release](https://github.com/TAJ-IT-Solutions-Limited/fossbilling-enom/releases/tag/v1.0.3).
-2. The archive has no wrapper folder. `Enom.php` is already at `src/library/Registrar/Adapter/Enom.php` inside the zip. Copy that file to `library/Registrar/Adapter/Enom.php` in the FOSSBilling installation (`src/library/...` for a source checkout).
+2. The archive has no wrapper folder. Copy `src/library/Registrar/Adapter/Enom.php` to `library/Registrar/Adapter/Enom.php` in a packaged FOSSBilling installation (`src/library/Registrar/Adapter/Enom.php` for a source checkout). README, CHANGELOG, LICENSE, and the other documentation are under `docs/` so extracting the zip at the FOSSBilling root does not overwrite core files.
 3. In the admin panel, go to **System → Domain registration → Registrars → Enom → Install**.
 
 ## Configuration
@@ -94,8 +94,8 @@ These are limitations of the FOSSBilling core or of Enom's API, not of the adapt
 
 | Gap | Why | Workaround |
 |---|---|---|
-| `registered_at` is cleared on every sync | `ServiceDomain\Service::syncWhois()` writes `formatRegistrarTimestamp($whois->getRegistrationTime())` unconditionally, and Enom's `GetDomainInfo` has no creation date, so the adapter returns `null` and the stored date is overwritten with `null`. | Apply `docs/fossbilling-core-registered-at.patch` to FOSSBilling, and report it upstream. |
-| Nameservers are not persisted from a sync | The adapter fills `setNs1()`…`setNs4()`, but `syncWhois()` never reads them. Delegation changes made in the Enom control panel therefore stay invisible in FOSSBilling. | Apply the same upstream patch pattern, or update nameservers from FOSSBilling (which writes both sides). |
+| `registered_at` is cleared on every sync | `ServiceDomain\Service::syncWhois()` writes `formatRegistrarTimestamp($whois->getRegistrationTime())` unconditionally, and Enom's `GetDomainInfo` has no creation date, so the adapter returns `null` and the stored date is overwritten with `null`. | Proposed upstream fix only, in `docs/fossbilling-core-registered-at.patch`. It is for FOSSBilling maintainers. Do not apply it to a production billing install from this package. |
+| Nameservers are not persisted from a sync | The adapter fills `setNs1()`…`setNs4()`, but `syncWhois()` never reads them. Delegation changes made in the Enom control panel therefore stay invisible in FOSSBilling. | Update nameservers from FOSSBilling, which writes both sides. A core change would be needed before a sync can store them. |
 | `GetAuthCode` coverage | Enom exposes the auth code over the API for some accounts and TLDs only; the command is not in Enom's public command catalog. | The error tells the client or staff to use the Enom control panel, or to send the code with `SynchAuthInfo`. |
 | Write commands are not covered by the live check | `tools/live_readonly_check.php` refuses `Purchase`, `Extend`, `TP_CreateOrder` and `ModifyNS` by design, so those paths are only exercised against OTE. | Run `docs/ote-checklist.md` before tagging a release. |
 
@@ -117,6 +117,8 @@ The adapter returns Enom's `Err1` text as the registrar error.
 - A refused `GetAuthCode` returns an actionable message and error code `3004`.
 - README corrected: the registration date and the nameserver sync need a core change (see "Known gaps").
 - CI lints every PHP file and runs `composer validate`.
+- A purchase with no nameservers sends `UseDNS=default`, because Enom requires `UseDNS` or `NSx`.
+- Corrects two 1.0.2 notes (registration-date and nameserver persistence depend on FOSSBilling core, see Known gaps).
 
 ### 1.0.2 — Security and reliability update. All users should upgrade.
 
