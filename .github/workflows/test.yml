@@ -19,5 +19,6 @@ jobs:
           coverage: none
       - run: php -l src/library/Registrar/Adapter/Enom.php
       - run: composer update --no-interaction --prefer-dist
+      - run: php tests/load_against_core.php
       - run: vendor/bin/phpunit
       - run: php tests/EnomParseTest.php

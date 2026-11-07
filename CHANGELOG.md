@@ -2,6 +2,7 @@
 
 ## 1.0.2
 
+- `getHttpClient()` returns `Symfony\Contracts\HttpClient\HttpClientInterface`, the same signature as FOSSBilling 0.8.9. The read-only check no longer defines its own registrar classes, so it cannot hide a signature mismatch.
 - `tools/live_readonly_check.php` calls only GetBalance, Check, and GetDomainInfo on the live host. Credentials stay in the environment.
 
 - Enom calls are POST bodies. The API token is not put in the URL. POST itself is not in the Enom docs, so release waits for a read-only check.

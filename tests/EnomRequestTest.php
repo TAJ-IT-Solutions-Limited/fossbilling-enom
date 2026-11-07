@@ -37,7 +37,7 @@ final class EnomRequestTest extends TestCase
         ];
         foreach ($cases as $method => $command) {
             $client = $this->body($ok);
-            $domain = new Registrar_Domain();
+            $domain = enom_test_domain();
             $this->assertTrue($this->adapter($client)->{$method}($domain));
             $this->assertSame('POST', $client->calls[0][0]);
             $this->assertSame('https://reseller.enom.com/interface.asp', $client->calls[0][1]);
@@ -53,7 +53,7 @@ final class EnomRequestTest extends TestCase
     public function testTransferUsesIndexedEnomFields(): void
     {
         $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200', 'TransferOrderID' => '77']);
-        $this->adapter($client)->transferDomain(new Registrar_Domain());
+        $this->adapter($client)->transferDomain(enom_test_domain());
         $body = $client->calls[0][2]['body'];
         $this->assertSame('Autoverification', $body['OrderType']);
         $this->assertSame('1', $body['DomainCount']);
@@ -70,7 +70,7 @@ final class EnomRequestTest extends TestCase
         $client = new FakeEnomClient(["<html><title>Attention Required</title><body>blocked</body></html>\n"]);
         $this->expectException(Registrar_Exception::class);
         $this->expectExceptionMessage('unexpected response: check credentials / IP allow-list / WAF');
-        $this->adapter($client)->isDomainAvailable(new Registrar_Domain());
+        $this->adapter($client)->isDomainAvailable(enom_test_domain());
     }
 
     public function testDoneFalseIsRejected(): void
@@ -78,7 +78,7 @@ final class EnomRequestTest extends TestCase
         $client = $this->body(['ErrCount' => '0', 'Done' => 'false', 'RRPCode' => '200']);
         $this->expectException(Registrar_Exception::class);
         $this->expectExceptionMessage('Purchase was not completed');
-        $this->adapter($client)->registerDomain(new Registrar_Domain());
+        $this->adapter($client)->registerDomain(enom_test_domain());
     }
 
     public function testUnexpectedRrpCodeIsRejected(): void
@@ -86,16 +86,16 @@ final class EnomRequestTest extends TestCase
         $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '540']);
         $this->expectException(Registrar_Exception::class);
         $this->expectExceptionMessage('Extend was refused');
-        $this->adapter($client)->renewDomain(new Registrar_Domain());
+        $this->adapter($client)->renewDomain(enom_test_domain());
     }
 
     public function testRegistrationRefusesAMissingCountry(): void
     {
-        $contact = new Registrar_Domain_Contact(country: '');
+        $contact = enom_test_contact(['country' => '']);
         $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
         $this->expectException(Registrar_Exception::class);
         $this->expectExceptionMessage('Registrant Country is required');
-        $this->adapter($client)->registerDomain(new Registrar_Domain($contact));
+        $this->adapter($client)->registerDomain(enom_test_domain($contact));
     }
 
     public function testNameserversComeFromTheDocumentedDnsEntries(): void
@@ -116,20 +116,20 @@ final class EnomRequestTest extends TestCase
 </interface-response>
 XML;
         $client = new FakeEnomClient([$xml]);
-        $domain = new Registrar_Domain();
+        $domain = enom_test_domain();
         $domain->setRegistrationTime(1710000000);
         $this->adapter($client)->getDomainDetails($domain);
         $this->assertSame('xml', $client->calls[0][2]['body']['responsetype']);
-        $this->assertSame('ns1.example.net', $domain->nameservers[1]);
-        $this->assertSame('ns2.example.net', $domain->nameservers[2]);
-        $this->assertSame(1710000000, $domain->registrationTime);
+        $this->assertSame('ns1.example.net', $domain->getNs1());
+        $this->assertSame('ns2.example.net', $domain->getNs2());
+        $this->assertSame(1710000000, $domain->getRegistrationTime());
     }
 
     public function testUaeRegistrationFillsStateFromTheCityAndUsesThePostalPlaceholder(): void
     {
-        $contact = new Registrar_Domain_Contact(state: '', zip: '');
+        $contact = enom_test_contact(['state' => '', 'zip' => '']);
         $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
-        $this->assertTrue($this->adapter($client)->registerDomain(new Registrar_Domain($contact)));
+        $this->assertTrue($this->adapter($client)->registerDomain(enom_test_domain($contact)));
         $body = $client->calls[0][2]['body'];
         $this->assertSame('Abu Dhabi', $body['RegistrantCity']);
         $this->assertSame('Abu Dhabi', $body['RegistrantStateProvince']);
@@ -139,33 +139,33 @@ XML;
 
     public function testRegistrationRefusesAMissingPostalCodeOutsideTheNoCodeList(): void
     {
-        $contact = new Registrar_Domain_Contact(country: 'US', state: 'WA', zip: '');
+        $contact = enom_test_contact(['country' => 'US', 'state' => 'WA', 'zip' => '']);
         $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
         $this->expectException(Registrar_Exception::class);
         $this->expectExceptionMessage('Registrant PostalCode is required');
-        $this->adapter($client)->registerDomain(new Registrar_Domain($contact));
+        $this->adapter($client)->registerDomain(enom_test_domain($contact));
     }
 
     public function testQueuedPurchaseCodeIsSuccess(): void
     {
         $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '1300', 'OrderID' => '42']);
-        $this->assertTrue($this->adapter($client)->registerDomain(new Registrar_Domain()));
+        $this->assertTrue($this->adapter($client)->registerDomain(enom_test_domain()));
     }
 
     public function testRegistrationRefusesAMissingCity(): void
     {
-        $contact = new Registrar_Domain_Contact(city: '');
+        $contact = enom_test_contact(['city' => '']);
         $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
         $this->expectException(Registrar_Exception::class);
         $this->expectExceptionMessage('Registrant City is required');
-        $this->adapter($client)->registerDomain(new Registrar_Domain($contact));
+        $this->adapter($client)->registerDomain(enom_test_domain($contact));
     }
 
     public function testTransferOmitsMissingContactFields(): void
     {
-        $contact = new Registrar_Domain_Contact(city: '', state: '', zip: '');
+        $contact = enom_test_contact(['city' => '', 'state' => '', 'zip' => '']);
         $client = $this->body(['ErrCount' => '0', 'OrderID' => '88']);
-        $this->assertTrue($this->adapter($client)->transferDomain(new Registrar_Domain($contact)));
+        $this->assertTrue($this->adapter($client)->transferDomain(enom_test_domain($contact)));
         $body = $client->calls[0][2]['body'];
         $this->assertSame('epp-code', $body['AuthInfo1']);
         $this->assertArrayNotHasKey('RegistrantFirstName', $body);
@@ -199,12 +199,14 @@ XML;
 </interface-response>
 XML;
         $client = new FakeEnomClient([$xml]);
-        $domain = new Registrar_Domain();
+        $domain = new EnomStatusDomain();
+        $domain->setSld('example');
+        $domain->setTld('com');
         $this->adapter($client)->getDomainDetails($domain);
-        $this->assertSame('ns1.nested.example', $domain->nameservers[1]);
-        $this->assertSame('ns2.nested.example', $domain->nameservers[2]);
+        $this->assertSame('ns1.nested.example', $domain->getNs1());
+        $this->assertSame('ns2.nested.example', $domain->getNs2());
         $this->assertSame('Registered', $domain->status);
-        $this->assertSame(strtotime('10/17/2027 9:43:20 PM'), $domain->expirationTime);
+        $this->assertSame(strtotime('10/17/2027 9:43:20 PM'), $domain->getExpirationTime());
     }
 
     public function testTransferPendingConsentIsSuccess(): void
@@ -226,6 +228,16 @@ XML;
 </interface-response>
 XML;
         $client = new FakeEnomClient([$xml]);
-        $this->assertTrue($this->adapter($client)->transferDomain(new Registrar_Domain()));
+        $this->assertTrue($this->adapter($client)->transferDomain(enom_test_domain()));
+    }
+}
+
+final class EnomStatusDomain extends Registrar_Domain
+{
+    public ?string $status = null;
+
+    public function setStatus($status): void
+    {
+        $this->status = is_string($status) ? $status : null;
     }
 }

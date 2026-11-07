@@ -19,86 +19,6 @@ final class EnomLiveRefused extends RuntimeException
 {
 }
 
-final class EnomCurlResponse
-{
-    public function __construct(private string $body, private int $status, private array $headers)
-    {
-    }
-
-    public function getContent(bool $throw = true): string
-    {
-        return $this->body;
-    }
-
-    public function getStatusCode(): int
-    {
-        return $this->status;
-    }
-
-    public function getHeaders(bool $throw = true): array
-    {
-        return $this->headers;
-    }
-}
-
-final class EnomCurlClient
-{
-    public function __construct(private int $timeout = 90)
-    {
-    }
-
-    public function withOptions(array $options): self
-    {
-        $copy = clone $this;
-        if (isset($options['timeout'])) {
-            $copy->timeout = (int) $options['timeout'];
-        }
-
-        return $copy;
-    }
-
-    public function request(string $method, string $url, array $options = []): EnomCurlResponse
-    {
-        if ($method !== 'POST') {
-            throw new RuntimeException('Enom live check sends POST only');
-        }
-        $fields = $options['body'] ?? [];
-        if (!is_array($fields)) {
-            throw new RuntimeException('Enom live check posts form fields');
-        }
-        if (!function_exists('curl_init')) {
-            throw new RuntimeException('curl is not available');
-        }
-
-        $handle = curl_init($url);
-        if ($handle === false) {
-            throw new RuntimeException('curl_init failed');
-        }
-        curl_setopt_array($handle, [
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => http_build_query($fields),
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HEADER => true,
-            CURLOPT_TIMEOUT => $this->timeout,
-        ]);
-        $raw = curl_exec($handle);
-        $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-        $headerSize = (int) curl_getinfo($handle, CURLINFO_HEADER_SIZE);
-        curl_close($handle);
-        if (!is_string($raw)) {
-            throw new RuntimeException('curl exec failed');
-        }
-        $headerBlob = substr($raw, 0, $headerSize);
-        $body = substr($raw, $headerSize);
-        $headers = ['content-type' => ['text/plain']];
-        if (preg_match('/^content-type:\s*(.+)$/im', $headerBlob, $match) === 1) {
-            $headers['content-type'] = [trim($match[1])];
-        }
-
-        return new EnomCurlResponse($body, $status, $headers);
-    }
-}
-
 function enom_live_command_allowed(string $command): bool
 {
     return in_array($command, ENOM_LIVE_COMMANDS, true);
@@ -160,138 +80,19 @@ function enom_live_split_domain(string $domain): array
     return [substr($domain, 0, $dot), substr($domain, $dot + 1)];
 }
 
-if (!class_exists('Registrar_Exception', false)) {
-    class Registrar_Exception extends Exception
-    {
-    }
-}
-
-if (!class_exists('Registrar_AdapterAbstract', false)) {
-    class Registrar_AdapterAbstract
-    {
-        public function getLog(): object
-        {
-            return new class {
-                public function debug(string $message): void
-                {
-                }
-
-                public function err(string $message): void
-                {
-                }
-
-                public function info(string $message): void
-                {
-                }
-            };
-        }
-
-        public function getHttpClient(): object
-        {
-            throw new RuntimeException('no http client');
-        }
-    }
-}
-
-if (!class_exists('Registrar_Domain', false)) {
-    class Registrar_Domain
-    {
-        public ?int $expirationTime = null;
-        public ?int $registrationTime = null;
-        public array $nameservers = [];
-        private string $sld = '';
-        private string $tld = '';
-
-        public function setSld(string $value): void
-        {
-            $this->sld = $value;
-        }
-
-        public function getSld(): string
-        {
-            return $this->sld;
-        }
-
-        public function setTld(string $value): void
-        {
-            $this->tld = $value;
-        }
-
-        public function getTld(bool $withDot = true): string
-        {
-            return $withDot ? '.' . $this->tld : $this->tld;
-        }
-
-        public function setExpirationTime(?int $ts): void
-        {
-            $this->expirationTime = $ts;
-        }
-
-        public function getExpirationTime(): ?int
-        {
-            return $this->expirationTime;
-        }
-
-        public function setRegistrationTime(?int $ts): void
-        {
-            $this->registrationTime = $ts;
-        }
-
-        public function getRegistrationTime(): ?int
-        {
-            return $this->registrationTime;
-        }
-
-        public function setNs1(string $value): void
-        {
-            $this->nameservers[1] = $value;
-        }
-
-        public function setNs2(string $value): void
-        {
-            $this->nameservers[2] = $value;
-        }
-
-        public function setNs3(string $value): void
-        {
-            $this->nameservers[3] = $value;
-        }
-
-        public function setNs4(string $value): void
-        {
-            $this->nameservers[4] = $value;
-        }
-
-        public function getNs1(): string
-        {
-            return $this->nameservers[1] ?? '';
-        }
-
-        public function getNs2(): string
-        {
-            return $this->nameservers[2] ?? '';
-        }
-
-        public function getNs3(): string
-        {
-            return $this->nameservers[3] ?? '';
-        }
-
-        public function getNs4(): string
-        {
-            return $this->nameservers[4] ?? '';
-        }
-    }
-}
-
 function enom_live_boot(string $fossPath): object
 {
     $fossPath = rtrim($fossPath, "/\\");
     $autoload = $fossPath . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
-    if (is_file($autoload)) {
-        require_once $autoload;
+    if (!is_file($autoload)) {
+        throw new RuntimeException('FOSSBilling vendor/autoload.php was not found');
     }
-    if (!class_exists('Registrar_Adapter_Enom', false)) {
+    require_once $autoload;
+    if (!class_exists(Registrar_AdapterAbstract::class, true)) {
+        throw new RuntimeException('FOSSBilling Registrar_AdapterAbstract did not load');
+    }
+    require_once __DIR__ . '/EnomCurlClient.php';
+    if (!class_exists(Registrar_Adapter_Enom::class, false)) {
         require_once dirname(__DIR__) . '/src/library/Registrar/Adapter/Enom.php';
     }
     if (class_exists(\Symfony\Component\HttpClient\HttpClient::class)) {

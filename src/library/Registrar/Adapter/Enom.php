@@ -44,7 +44,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
     ];
 
     /** @var object|null Test double. Production uses the parent HTTP client. */
-    private ?object $httpClientOverride = null;
+    private ?\Symfony\Contracts\HttpClient\HttpClientInterface $httpClientOverride = null;
 
     /** @var array{http_status?: int, content_type?: string, parsed_as?: string, body_snippet?: string} */
     private array $lastHttpMeta = [];
@@ -73,12 +73,12 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
 
     }
 
-    public function setHttpClient(object $client): void
+    public function setHttpClient(\Symfony\Contracts\HttpClient\HttpClientInterface $client): void
     {
         $this->httpClientOverride = $client;
     }
 
-    public function getHttpClient()
+    public function getHttpClient(): \Symfony\Contracts\HttpClient\HttpClientInterface
     {
         if ($this->httpClientOverride !== null) {
             return $this->httpClientOverride;
