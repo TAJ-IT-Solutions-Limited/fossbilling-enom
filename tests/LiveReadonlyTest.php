@@ -45,7 +45,7 @@ final class LiveReadonlyTest extends TestCase
             'ns_count' => 0,
             'ns_hosts' => '',
             'registered_at_kept' => false,
-            'error' => enom_live_redact('Err1 bad pw=' . $token . ' uid=' . $uid, $uid, $token),
+            'error' => enom_live_redact('Err1 saw ' . $token . ' pw=' . $token . ' uid=' . $uid, $uid, $token),
         ];
         $text = enom_live_format($row);
 
@@ -53,6 +53,8 @@ final class LiveReadonlyTest extends TestCase
         $this->assertStringNotContainsString($uid, $text);
         $this->assertStringContainsString('balance_ok=false', $text);
         $this->assertStringContainsString('check=error', $text);
-        $this->assertStringContainsString('[token]', $text);
+        $this->assertStringContainsString('saw [token]', $text);
+        $this->assertStringContainsString('pw=[redacted]', $text);
+        $this->assertStringContainsString('uid=[redacted]', $text);
     }
 }
