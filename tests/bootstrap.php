@@ -61,6 +61,8 @@ class Registrar_Domain_Contact
 class Registrar_Domain
 {
     public ?int $registrationTime = 1710000000;
+    public ?int $expirationTime = null;
+    public ?string $status = null;
     public array $nameservers = [];
 
     public function __construct(public Registrar_Domain_Contact $contact = new Registrar_Domain_Contact())
@@ -81,8 +83,8 @@ class Registrar_Domain
     public function setNs2(string $value): void { $this->nameservers[2] = $value; }
     public function setNs3(string $value): void { $this->nameservers[3] = $value; }
     public function setNs4(string $value): void { $this->nameservers[4] = $value; }
-    public function setExpirationTime(int $ts): void {}
-    public function setStatus(string $status): void {}
+    public function setExpirationTime(int $ts): void { $this->expirationTime = $ts; }
+    public function setStatus(string $status): void { $this->status = $status; }
 }
 
 require dirname(__DIR__) . '/src/library/Registrar/Adapter/Enom.php';

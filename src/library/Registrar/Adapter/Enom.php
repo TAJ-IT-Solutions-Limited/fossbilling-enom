@@ -195,21 +195,18 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             throw new Registrar_Exception('Auth / EPP code is required for Enom domain transfer');
         }
 
+        $params = [
+            'OrderType' => 'Autoverification',
+            'DomainCount' => '1',
+            'SLD1' => $domain->getSld(),
+            'TLD1' => ltrim((string) $domain->getTld(false), '.'),
+            'AuthInfo1' => (string) $auth,
+            'EndUserIP' => $this->_endUserIp(),
+        ];
         $contact = $domain->getContactRegistrar();
-        if (!$contact) {
-            throw new Registrar_Exception('Registrant contact is required for Enom domain transfer');
+        if ($contact) {
+            $params = array_merge($params, $this->_presentRegistrantParams($contact));
         }
-        $params = array_merge(
-            [
-                'OrderType' => 'Autoverification',
-                'DomainCount' => '1',
-                'SLD1' => $domain->getSld(),
-                'TLD1' => ltrim((string) $domain->getTld(false), '.'),
-                'AuthInfo1' => (string) $auth,
-                'EndUserIP' => $this->_endUserIp(),
-            ],
-            $this->_registrantParams($contact)
-        );
         $data = $this->_makeRequest('TP_CreateOrder', $params);
         $this->_assertDone($data, 'TP_CreateOrder');
         $orderId = $this->_firstKey($data, ['OrderID', 'TransferOrderID']);
@@ -268,7 +265,13 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
 
         $this->_applyNameservers($domain, $data);
 
-        $status = $this->_firstKey($data, ['status', 'Status', 'ServiceStatus', 'RRPCode']);
+        $status = $this->_firstKey($data, ['registrationstatus', 'RegistrationStatus', 'ServiceStatus']);
+        if ($status === null) {
+            $status = $this->_deepKey($data, ['registrationstatus', 'RegistrationStatus']);
+        }
+        if ($status === null) {
+            $status = $this->_firstKey($data, ['status', 'Status']);
+        }
         if ($status !== null && is_string($status) && method_exists($domain, 'setStatus')) {
             $domain->setStatus($status);
         }
@@ -564,6 +567,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
     {
         $ir = $decoded['InterfaceResponse'] ?? $decoded['interface-response'] ?? $decoded['interface_response'] ?? null;
         if (is_array($ir)) {
+            // One level only. Nested blocks such as GetDomainInfo/services stay arrays.
             return array_merge($decoded, $ir);
         }
 
@@ -733,17 +737,58 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
     {
         [$first, $last] = $this->_splitName((string) $c->getName());
 
-        return [
+        $params = [
             'RegistrantFirstName' => $this->_requiredRegistrant('FirstName', $first),
             'RegistrantLastName' => $this->_requiredRegistrant('LastName', $last),
             'RegistrantEmailAddress' => $this->_requiredRegistrant('EmailAddress', $c->getEmail()),
             'RegistrantAddress1' => $this->_requiredRegistrant('Address1', $c->getAddress1()),
             'RegistrantCity' => $this->_requiredRegistrant('City', $c->getCity()),
-            'RegistrantStateProvince' => $this->_requiredRegistrant('StateProvince', $c->getState()),
-            'RegistrantPostalCode' => $this->_requiredRegistrant('PostalCode', $c->getZip()),
             'RegistrantCountry' => $this->_requiredRegistrant('Country', $c->getCountry()),
             'RegistrantPhone' => $this->_requiredRegistrant('Phone', $this->_formatPhone($c)),
         ];
+        $this->_putIfPresent($params, 'RegistrantStateProvince', $c->getState());
+        $this->_putIfPresent($params, 'RegistrantPostalCode', $c->getZip());
+
+        return $params;
+    }
+
+    /**
+     * Transfer orders send only the contact fields that exist. Empty state or postal code is omitted.
+     *
+     * @return array<string, string>
+     */
+    private function _presentRegistrantParams(Registrar_Domain_Contact $c): array
+    {
+        [$first, $last] = $this->_splitName((string) $c->getName());
+        $params = [];
+        $this->_putIfPresent($params, 'RegistrantFirstName', $first);
+        $this->_putIfPresent($params, 'RegistrantLastName', $last);
+        $this->_putIfPresent($params, 'RegistrantEmailAddress', $c->getEmail());
+        $this->_putIfPresent($params, 'RegistrantAddress1', $c->getAddress1());
+        $this->_putIfPresent($params, 'RegistrantCity', $c->getCity());
+        $this->_putIfPresent($params, 'RegistrantStateProvince', $c->getState());
+        $this->_putIfPresent($params, 'RegistrantPostalCode', $c->getZip());
+        $this->_putIfPresent($params, 'RegistrantCountry', $c->getCountry());
+        $this->_putIfPresent($params, 'RegistrantPhone', $this->_formatPhone($c));
+        if (method_exists($c, 'getAddress2')) {
+            $this->_putIfPresent($params, 'RegistrantAddress2', $c->getAddress2());
+        }
+        if (method_exists($c, 'getCompany')) {
+            $this->_putIfPresent($params, 'RegistrantOrganizationName', $c->getCompany());
+        }
+
+        return $params;
+    }
+
+    /**
+     * @param array<string, string> $params
+     */
+    private function _putIfPresent(array &$params, string $key, ?string $value): void
+    {
+        $value = trim((string) $value);
+        if ($value !== '') {
+            $params[$key] = $value;
+        }
     }
 
     private function _requiredRegistrant(string $field, ?string $value): string
@@ -789,10 +834,30 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
      */
     private function _nameserversFromDomainInfo(array $data): array
     {
-        $services = $data['services'] ?? null;
-        if (!is_array($services)) {
-            return [];
+        $blocks = [];
+        if (isset($data['services']) && is_array($data['services'])) {
+            $blocks[] = $data['services'];
         }
+        foreach (['GetDomainInfo', 'getdomaininfo'] as $key) {
+            if (isset($data[$key]['services']) && is_array($data[$key]['services'])) {
+                $blocks[] = $data[$key]['services'];
+            }
+        }
+        $hosts = [];
+        foreach ($blocks as $services) {
+            $hosts = array_merge($hosts, $this->_hostsFromServiceEntries($services));
+        }
+
+        return $hosts;
+    }
+
+    /**
+     * @param array<string, mixed> $services
+     *
+     * @return list<string>
+     */
+    private function _hostsFromServiceEntries(array $services): array
+    {
         $entries = $services['entry'] ?? null;
         if (!is_array($entries)) {
             return [];

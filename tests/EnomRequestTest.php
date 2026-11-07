@@ -124,4 +124,70 @@ XML;
         $this->assertSame('ns2.example.net', $domain->nameservers[2]);
         $this->assertSame(1710000000, $domain->registrationTime);
     }
+
+    public function testUaeRegistrationOmitsEmptyStateAndPostalCode(): void
+    {
+        $contact = new Registrar_Domain_Contact(state: '', zip: '');
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $this->assertTrue($this->adapter($client)->registerDomain(new Registrar_Domain($contact)));
+        $body = $client->calls[0][2]['body'];
+        $this->assertSame('Abu Dhabi', $body['RegistrantCity']);
+        $this->assertSame('AE', $body['RegistrantCountry']);
+        $this->assertArrayNotHasKey('RegistrantStateProvince', $body);
+        $this->assertArrayNotHasKey('RegistrantPostalCode', $body);
+    }
+
+    public function testRegistrationRefusesAMissingCity(): void
+    {
+        $contact = new Registrar_Domain_Contact(city: '');
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $this->expectException(Registrar_Exception::class);
+        $this->expectExceptionMessage('Registrant City is required');
+        $this->adapter($client)->registerDomain(new Registrar_Domain($contact));
+    }
+
+    public function testTransferOmitsMissingContactFields(): void
+    {
+        $contact = new Registrar_Domain_Contact(city: '', state: '', zip: '');
+        $client = $this->body(['ErrCount' => '0', 'OrderID' => '88']);
+        $this->assertTrue($this->adapter($client)->transferDomain(new Registrar_Domain($contact)));
+        $body = $client->calls[0][2]['body'];
+        $this->assertSame('epp-code', $body['AuthInfo1']);
+        $this->assertArrayNotHasKey('RegistrantCity', $body);
+        $this->assertArrayNotHasKey('RegistrantStateProvince', $body);
+        $this->assertArrayNotHasKey('RegistrantPostalCode', $body);
+        $this->assertArrayNotHasKey('Done', $body);
+        $this->assertArrayNotHasKey('RRPCode', $body);
+    }
+
+    public function testNestedGetDomainInfoKeepsServicesAndReadsStatus(): void
+    {
+        $xml = <<<'XML'
+<?xml version="1.0"?>
+<interface-response>
+  <GetDomainInfo>
+    <status>
+      <registrationstatus>Registered</registrationstatus>
+      <expiration>10/17/2027 9:43:20 PM</expiration>
+    </status>
+    <services>
+      <entry name="dnsserver">
+        <configuration>
+          <dns>ns1.nested.example</dns>
+          <dns>ns2.nested.example</dns>
+        </configuration>
+      </entry>
+    </services>
+  </GetDomainInfo>
+  <ErrCount>0</ErrCount>
+</interface-response>
+XML;
+        $client = new FakeEnomClient([$xml]);
+        $domain = new Registrar_Domain();
+        $this->adapter($client)->getDomainDetails($domain);
+        $this->assertSame('ns1.nested.example', $domain->nameservers[1]);
+        $this->assertSame('ns2.nested.example', $domain->nameservers[2]);
+        $this->assertSame('Registered', $domain->status);
+        $this->assertSame(strtotime('10/17/2027 9:43:20 PM'), $domain->expirationTime);
+    }
 }
