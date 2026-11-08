@@ -313,7 +313,40 @@ XML;
             $this->adapter($client)->modifyNs($domain);
             $this->fail('modifyNs with no nameservers must throw');
         } catch (Registrar_Exception $e) {
-            $this->assertStringContainsString('At least one nameserver is required', $e->getMessage());
+            $this->assertStringContainsString('At least two nameservers are required', $e->getMessage());
+        }
+        $this->assertSame([], $client->calls, 'no request may reach Enom');
+    }
+
+    public function testPurchaseWithOneNameserverUsesDefaultDns(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $domain = enom_test_domain();
+        $domain->setNs1('ns1.example.net');
+        $domain->setNs2('');
+        $log = new CapturingBoxLog();
+        $adapter = $this->adapter($client);
+        $adapter->setLog($log);
+        $this->assertTrue($adapter->registerDomain($domain));
+        $body = $client->calls[0][2]['body'];
+        $this->assertSame('default', $body['UseDNS']);
+        $this->assertArrayNotHasKey('NS1', $body);
+        $this->assertCount(1, $log->warnings);
+        $this->assertStringContainsString('examplecom', $log->warnings[0]);
+        $this->assertStringContainsString('1', $log->warnings[0]);
+    }
+
+    public function testModifyNsRefusesASingleNameserver(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true']);
+        $domain = enom_test_domain();
+        $domain->setNs1('ns1.example.net');
+        $domain->setNs2('');
+        try {
+            $this->adapter($client)->modifyNs($domain);
+            $this->fail('modifyNs with one nameserver must throw');
+        } catch (Registrar_Exception $e) {
+            $this->assertSame('At least two nameservers are required to update the delegation', $e->getMessage());
         }
         $this->assertSame([], $client->calls, 'no request may reach Enom');
     }
@@ -369,7 +402,7 @@ XML;
         $this->assertStringNotContainsString('Enom', $message);
         $this->assertStringNotContainsString('SynchAuthInfo', $message);
         $this->assertSame(3004, $e->getCode());
-        $line = implode("\n", $log->errors);
+        $line = implode("\n", $log->warnings);
         $this->assertStringNotContainsString('ada@example.com', $line);
         $this->assertStringNotContainsString('fixture-pass', $line);
         $this->assertStringContainsString('examplecom', $line);
@@ -383,9 +416,17 @@ final class CapturingBoxLog extends Box_Log
     /** @var list<string> */
     public array $errors = [];
 
+    /** @var list<string> */
+    public array $warnings = [];
+
     public function err(string $message): void
     {
         $this->errors[] = $message;
+    }
+
+    public function warning(string $message): void
+    {
+        $this->warnings[] = $message;
     }
 }
 

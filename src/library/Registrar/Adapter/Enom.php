@@ -195,8 +195,11 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         }
 
         $ns = $this->_nameserverParams($domain);
-        if ($ns === []) {
+        if (count($ns) < 2) {
             $params['UseDNS'] = 'default';
+            $this->getLog()->warning(
+                'Enom Purchase nameserver count for ' . $domain->getName() . ': ' . count($ns)
+            );
         } else {
             $params = array_merge($params, $ns);
         }
@@ -310,10 +313,10 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
     public function modifyNs(Registrar_Domain $domain): bool
     {
         $ns = $this->_nameserverParams($domain);
-        if ($ns === []) {
-            // Never send an empty delegation request: Enom documents an empty NS1 as
+        if (count($ns) < 2) {
+            // Never send a one-host or empty delegation. Enom documents an empty NS1 as
             // "no name servers", which would take the domain out of the DNS.
-            throw new Registrar_Exception('At least one nameserver is required to update the delegation');
+            throw new Registrar_Exception('At least two nameservers are required to update the delegation');
         }
 
         $params = array_merge(
@@ -348,7 +351,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
                 'EndUserIP' => $this->_endUserIp(),
             ]);
         } catch (Registrar_Exception $e) {
-            $this->getLog()->err(
+            $this->getLog()->warning(
                 'Enom GetAuthCode failed for ' . $domain->getName() . ': ' . $e->getMessage()
                 . '. Retrieve it in the Enom control panel or send it with SynchAuthInfo.'
             );
@@ -361,7 +364,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             return trim($auth);
         }
 
-        $this->getLog()->err(
+        $this->getLog()->warning(
             'Enom GetAuthCode returned no auth code for ' . $domain->getName()
             . '. Retrieve it in the Enom control panel or send it with SynchAuthInfo.'
         );

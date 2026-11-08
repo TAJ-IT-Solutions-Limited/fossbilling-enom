@@ -1,6 +1,8 @@
 Proposed upstream fix — do not apply this to a production billing install
 ==========================================================================
 
+Fixed upstream (FOSSBilling#4656). Applies to FOSSBilling 0.8.9 and earlier only. Do not apply to a release that already contains the fix.
+
 This file is a proposal for FOSSBilling maintainers. Shipping it here does not
 mean a billing server should apply it.
 

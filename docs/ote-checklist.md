@@ -21,7 +21,7 @@ Do not run this against the production account.
 | 9 | Change nameservers to two hosts | `ModifyNS` | Accepted; `NS3`/`NS4` absent from the request |
 | 10 | Transfer in with a valid auth code | `TP_CreateOrder` | `transferorderid` returned, or status `Pending consent` |
 | 11 | Transfer in with a wrong auth code | `TP_CreateOrder` | Enom error text surfaced to the client, order stays pending/failed (never "active") |
-| 12 | Auth code retrieval | `GetAuthCode` | Either the code is returned, or the actionable `3004` message is shown. Record which one so the README stays accurate |
+| 12 | Auth code retrieval | `GetAuthCode` | Either the code is returned, or the client sees a contact-support message and staff see the details in the log. Record which one so the README stays accurate |
 | 13 | Full sync | `GetDomainInfo` | Expiry unchanged on the same calendar day; `ns1`/`ns2` populated on the domain object; `registered_at` unchanged (with the core patch) |
 | 14 | Failure path | any command with a wrong token | `unexpected response: check credentials / IP allow-list / WAF`, no order is created |
 
