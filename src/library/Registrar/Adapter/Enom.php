@@ -815,6 +815,9 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             }
         }
         if (in_array($action, self::WRITE_COMMANDS, true) && !$doneOk && !$rrpOk) {
+            if ($action === 'TP_CreateOrder' && $this->_transferOrderId($data) !== '') {
+                return;
+            }
             throw new Registrar_Exception($action . ' was not completed');
         }
     }
