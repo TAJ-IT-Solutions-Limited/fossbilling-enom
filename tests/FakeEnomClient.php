@@ -112,6 +112,8 @@ final class FakeEnomClient implements HttpClientInterface
     /** @var list<array{0: string, 1: string, 2: array<string, mixed>}> */
     public array $calls = [];
 
+    public int $status = 200;
+
     /** @param list<string> $bodies */
     public function __construct(private array $bodies)
     {
@@ -129,8 +131,11 @@ final class FakeEnomClient implements HttpClientInterface
         if (!is_string($body)) {
             throw new RuntimeException('no fake Enom body left');
         }
+        if (str_starts_with($body, 'THROW ')) {
+            throw new RuntimeException(substr($body, 6));
+        }
 
-        return new FakeEnomResponse($body);
+        return new FakeEnomResponse($body, $this->status);
     }
 
     public function stream(ResponseInterface|iterable $responses, ?float $timeout = null): ResponseStreamInterface

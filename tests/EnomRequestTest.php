@@ -10,7 +10,11 @@ final class EnomRequestTest extends TestCase
 {
     private function adapter(FakeEnomClient $client): Registrar_Adapter_Enom
     {
-        $adapter = new Registrar_Adapter_Enom(['uid' => 'fixture-user', 'pw' => 'fixture-pass']);
+        $adapter = new Registrar_Adapter_Enom([
+            'uid' => 'fixture-user',
+            'pw' => 'fixture-pass',
+            'end_user_ip' => '203.0.113.10',
+        ]);
         $adapter->setHttpClient($client);
 
         return $adapter;
@@ -408,6 +412,57 @@ XML;
         $this->assertStringContainsString('examplecom', $line);
         $this->assertStringContainsString($staffDetail, $line);
         $this->assertStringContainsString('Retrieve it in the Enom control panel or send it with SynchAuthInfo', $line);
+    }
+
+    public function testAWriteWithoutDoneOrRrpCodeFailsClosed(): void
+    {
+        $client = $this->body(['ErrCount' => '0']);
+        $this->expectException(Registrar_Exception::class);
+        $this->expectExceptionMessage('Purchase was not completed');
+        $this->adapter($client)->registerDomain(enom_test_domain());
+    }
+
+    public function testAReadWithoutDoneOrRrpCodeStaysAvailableFromTheFlag(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Available' => 'true']);
+        $this->assertTrue($this->adapter($client)->isDomainAvailable(enom_test_domain()));
+    }
+
+    public function testAnHttpErrorIsATransportFailure(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true']);
+        $client->status = 503;
+        $this->expectException(Registrar_Exception::class);
+        $this->expectExceptionMessage('Enom HTTP request failed');
+        $this->adapter($client)->registerDomain(enom_test_domain());
+    }
+
+    public function testAPurchaseTimeoutChecksTheDomainAndDoesNotBuyAgain(): void
+    {
+        $client = new FakeEnomClient([
+            "THROW timeout\n",
+            "ErrCount=0\nOrderID=8841\n",
+        ]);
+        $log = new CapturingBoxLog();
+        $adapter = $this->adapter($client);
+        $adapter->setLog($log);
+        try {
+            $adapter->registerDomain(enom_test_domain());
+            $this->fail('the timeout was treated as success');
+        } catch (Registrar_Exception $e) {
+            $this->assertSame('Enom request failed', $e->getMessage());
+        }
+        $this->assertCount(2, $client->calls);
+        $this->assertSame('Purchase', $client->calls[0][2]['body']['command']);
+        $this->assertSame('GetDomainInfo', $client->calls[1][2]['body']['command']);
+        $this->assertStringContainsString('OrderID=8841', implode("\n", $log->errors));
+    }
+
+    public function testCronSendsTheConfiguredEndUserIp(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $this->adapter($client)->registerDomain(enom_test_domain());
+        $this->assertSame('203.0.113.10', $client->calls[0][2]['body']['EndUserIP']);
     }
 }
 

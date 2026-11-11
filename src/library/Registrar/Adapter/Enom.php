@@ -16,7 +16,10 @@ declare(strict_types=1);
  */
 class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
 {
-    public const ADAPTER_BUILD = '2026-11-07-enom-1.0.3';
+    public const ADAPTER_BUILD = '2026-11-12-enom-1.0.4';
+
+    /** @var list<string> */
+    private const WRITE_COMMANDS = ['Purchase', 'Extend', 'TP_CreateOrder', 'ModifyNS'];
 
     /**
      * Sent only for countries that have no postal-code system.
@@ -41,6 +44,7 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
         'uid' => '',
         'pw' => '',
         'sandbox' => false,
+        'end_user_ip' => '',
     ];
 
     /** @var object|null Test double. Production uses the parent HTTP client. */
@@ -71,6 +75,9 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             );
         }
 
+        if (isset($options['end_user_ip']) && is_string($options['end_user_ip'])) {
+            $this->config['end_user_ip'] = trim($options['end_user_ip']);
+        }
     }
 
     public function setHttpClient(\Symfony\Contracts\HttpClient\HttpClientInterface $client): void
@@ -121,6 +128,14 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
                         'label' => 'Enom API token',
                         'description' => 'Enom API token (the pw parameter). Never logged or returned in errors.',
                         'required' => true,
+                    ],
+                ],
+                'end_user_ip' => [
+                    'text',
+                    [
+                        'label' => 'EndUserIP for cron',
+                        'description' => 'Public IP sent as EndUserIP when a purchase or renewal runs from cron or the command line. A browser request uses the visitor IP instead.',
+                        'required' => false,
                     ],
                 ],
             ],
@@ -498,8 +513,17 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             $this->getLog()->err('Enom HTTP error: ' . $e->getMessage());
             throw new Registrar_Exception('Enom HTTP request failed');
         } catch (\Throwable $e) {
+            if ($this->paidCommandTimedOut($command, $e)) {
+                $this->notePaidTimeout($command, $params);
+            }
             $this->getLog()->err('Enom transport error: ' . $e->getMessage());
             throw new Registrar_Exception('Enom request failed');
+        }
+
+        $status = (int) ($this->lastHttpMeta['http_status'] ?? 0);
+        if ($status < 200 || $status >= 300) {
+            $this->getLog()->err('Enom HTTP status ' . $status . ' for ' . $command);
+            throw new Registrar_Exception('Enom HTTP request failed');
         }
 
         $flat = $this->_parseEnomBody($body);
@@ -770,23 +794,63 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
      */
     private function _assertDone(array $data, string $action): void
     {
+        $doneOk = false;
         if (array_key_exists('Done', $data)) {
             $done = $data['Done'];
-            $ok = $done === true || $done === 1 || $done === '1' || (is_string($done) && strcasecmp($done, 'true') === 0);
-            if (!$ok) {
+            $doneOk = $done === true || $done === 1 || $done === '1' || (is_string($done) && strcasecmp($done, 'true') === 0);
+            if (!$doneOk) {
                 throw new Registrar_Exception($action . ' was not completed');
             }
         }
+        $rrpOk = false;
         if (isset($data['RRPCode']) && $data['RRPCode'] !== '') {
             $code = (int) $data['RRPCode'];
             if (!in_array($code, [200, 210, 1300], true)) {
                 throw new Registrar_Exception($action . ' was refused');
             }
+            $rrpOk = true;
             if ($code === 1300) {
                 $orderId = $this->_firstKey($data, ['OrderID', 'orderid']);
                 $this->getLog()->info('Enom ' . $action . ' queued RRPCode=1300 order=' . (string) $orderId);
             }
         }
+        if (in_array($action, self::WRITE_COMMANDS, true) && !$doneOk && !$rrpOk) {
+            throw new Registrar_Exception($action . ' was not completed');
+        }
+    }
+
+    private function paidCommandTimedOut(string $command, \Throwable $error): bool
+    {
+        if (!in_array($command, ['Purchase', 'Extend'], true)) {
+            return false;
+        }
+        $message = strtolower($error->getMessage());
+
+        return str_contains($message, 'timeout') || str_contains($message, 'timed out');
+    }
+
+    /**
+     * @param array<string, scalar|null> $params
+     */
+    private function notePaidTimeout(string $command, array $params): void
+    {
+        try {
+            $info = $this->_makeRequest('GetDomainInfo', [
+                'SLD' => (string) ($params['SLD'] ?? ''),
+                'TLD' => (string) ($params['TLD'] ?? ''),
+            ]);
+        } catch (\Throwable) {
+            $this->getLog()->err('Enom ' . $command . ' timed out and GetDomainInfo failed');
+
+            return;
+        }
+        $orderId = $this->_firstKey($info, ['OrderID', 'orderid']);
+        if ($orderId !== null && $orderId !== '') {
+            $this->getLog()->err('Enom ' . $command . ' timed out; OrderID=' . $orderId);
+
+            return;
+        }
+        $this->getLog()->err('Enom ' . $command . ' timed out; GetDomainInfo returned no OrderID');
     }
 
     /**
@@ -1088,11 +1152,17 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
 
     private function _endUserIp(): string
     {
-        if (!empty($_SERVER['REMOTE_ADDR']) && is_string($_SERVER['REMOTE_ADDR'])) {
-            return $_SERVER['REMOTE_ADDR'];
+        $cli = \PHP_SAPI === 'cli' || \PHP_SAPI === 'phpdbg';
+        $remote = $_SERVER['REMOTE_ADDR'] ?? '';
+        if (!$cli && is_string($remote) && $remote !== '') {
+            return $remote;
+        }
+        $configured = trim((string) ($this->config['end_user_ip'] ?? ''));
+        if ($configured === '') {
+            throw new Registrar_Exception('EndUserIP is required when Enom runs from cron or the command line');
         }
 
-        return '127.0.0.1';
+        return $configured;
     }
 
     /**
