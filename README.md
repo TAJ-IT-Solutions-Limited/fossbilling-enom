@@ -14,7 +14,7 @@ Built and maintained by [TAJHOST](https://tajhost.com).
 - Renewal (`Extend`).
 - Expiry sync (`GetDomainInfo`). A registration date is written only when Enom returns one, which it currently does not — see "Known gaps".
 - Nameserver updates (`ModifyNS`). Empty slots are omitted, and a request with no nameservers is refused.
-- Auth-code retrieval (`GetAuthCode`), with an actionable error when Enom refuses the command.
+- Auth-code retrieval (`GetAuthCode`). The client sees a contact-support message and staff see the details in the log.
 - Replies may be Enom's key=value text (including the `;URL Interface` preamble), XML, HTML, or JSON. A reply with no `ErrCount` is rejected. An Enom error is returned as the registrar error text.
 
 ## Requirements
@@ -94,8 +94,8 @@ These are limitations of the FOSSBilling core or of Enom's API, not of the adapt
 
 | Gap | Why | Workaround |
 |---|---|---|
-| `registered_at` is cleared on every sync | `ServiceDomain\Service::syncWhois()` writes `formatRegistrarTimestamp($whois->getRegistrationTime())` unconditionally, and Enom's `GetDomainInfo` has no creation date, so the adapter returns `null` and the stored date is overwritten with `null`. | Proposed upstream fix only, in `docs/fossbilling-core-registered-at.patch`. It is for FOSSBilling maintainers. Do not apply it to a production billing install from this package. Reported upstream as [FOSSBilling#4656](https://github.com/FOSSBilling/FOSSBilling/issues/4656). |
-| Nameservers are not persisted from a sync | The adapter fills `setNs1()`…`setNs4()`, but `syncWhois()` never reads them. Delegation changes made in the Enom control panel therefore stay invisible in FOSSBilling. | Update nameservers from FOSSBilling, which writes both sides. A core change would be needed before a sync can store them. Reported upstream as [FOSSBilling#4656](https://github.com/FOSSBilling/FOSSBilling/issues/4656). |
+| `registered_at` is cleared on every sync | `ServiceDomain\Service::syncWhois()` writes `formatRegistrarTimestamp($whois->getRegistrationTime())` unconditionally, and Enom's `GetDomainInfo` has no creation date, so the adapter returns `null` and the stored date is overwritten with `null`. | Proposed upstream fix only, in `docs/fossbilling-core-registered-at.patch`. It is for FOSSBilling maintainers. Do not apply it to a production billing install from this package. Reported upstream as [FOSSBilling#4656](https://github.com/FOSSBilling/FOSSBilling/issues/4656). Fixed upstream in FOSSBilling#4656; resolved in the first FOSSBilling release after 0.8.9. |
+| Nameservers are not persisted from a sync | The adapter fills `setNs1()`…`setNs4()`, but `syncWhois()` never reads them. Delegation changes made in the Enom control panel therefore stay invisible in FOSSBilling. | Update nameservers from FOSSBilling, which writes both sides. A core change would be needed before a sync can store them. Reported upstream as [FOSSBilling#4656](https://github.com/FOSSBilling/FOSSBilling/issues/4656). Fixed upstream in FOSSBilling#4656; resolved in the first FOSSBilling release after 0.8.9. |
 | `GetAuthCode` coverage | Enom exposes the auth code over the API for some accounts and TLDs only; the command is not in Enom's public command catalog. | The client sees a contact-support message and error code `3004`. Staff see the provider error and the panel or `SynchAuthInfo` hint in the log. |
 | Write commands are not covered by the live check | `tools/live_readonly_check.php` refuses `Purchase`, `Extend`, `TP_CreateOrder` and `ModifyNS` by design, so those paths are only exercised against OTE. | Recorded-response tests in CI. Run `docs/ote-checklist.md` when OTE access is available. |
 
@@ -108,6 +108,13 @@ The adapter returns Enom's `Err1` text as the registrar error.
 - **IP not whitelisted.** Enom rejected the call because the billing server's public IP is not in the account's API allow list. Add that IP in Enom's API settings. The request is sent by the FOSSBilling server, not by the visitor's browser.
 
 ## Changelog
+
+### 1.0.4
+
+- A purchase with fewer than two nameservers sends `UseDNS=default` and no `NSx`, and logs the domain and the count.
+- A delegation update with fewer than two nameservers is refused and makes no request.
+- `GetAuthCode` failures are logged as warnings. The client still sees the contact-support message.
+- Notes that FOSSBilling#4656 is fixed upstream for releases after 0.8.9. The 0.8.x workaround stays.
 
 ### 1.0.3
 

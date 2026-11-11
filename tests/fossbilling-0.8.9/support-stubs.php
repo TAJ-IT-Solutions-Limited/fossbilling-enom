@@ -56,6 +56,10 @@ namespace {
         {
         }
 
+        public function warning(string $message): void
+        {
+        }
+
         public function info(string $message): void
         {
         }

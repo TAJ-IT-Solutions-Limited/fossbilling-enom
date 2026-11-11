@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.4
+
+- A purchase with fewer than two nameservers sends `UseDNS=default` and no `NSx`, and logs the domain and the count.
+- A delegation update with fewer than two nameservers is refused and makes no request.
+- `GetAuthCode` failures are logged as warnings. The client still sees the contact-support message.
+- Notes that FOSSBilling#4656 is fixed upstream for releases after 0.8.9. The 0.8.x workaround stays.
+
 ## 1.0.3
 
 - Availability: reads Enom's indexed keys (`RRPCode1`, `Available1`) as well as the plain ones, so an account that always indexes cannot make every name look taken.
