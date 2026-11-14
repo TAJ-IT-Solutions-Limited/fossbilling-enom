@@ -2,6 +2,7 @@
 
 ## 1.0.4
 
+- `php bin/package.php` builds `enom-<version>.zip` for the extensions directory: `library/Registrar/Adapter/Enom.php` at the archive root, documentation under `docs/`, and a generic `icon.svg`. There is no `src/` prefix and no wrapping folder.
 - A purchase with fewer than two nameservers sends `UseDNS=default` and no `NSx`, and logs the domain and the count.
 - A delegation update with fewer than two nameservers is refused and makes no request.
 - `GetAuthCode` failures are logged as warnings. The client still sees the contact-support message.
