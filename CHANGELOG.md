@@ -2,9 +2,12 @@
 
 ## 1.0.4
 
-- `php bin/package.php` builds `enom-<version>.zip` for the extensions directory: `library/Registrar/Adapter/Enom.php` at the archive root, documentation under `docs/`, and a generic `icon.svg`. There is no `src/` prefix and no wrapping folder.
-- A purchase with fewer than two nameservers sends `UseDNS=default` and no `NSx`, and logs the domain and the count.
-- A delegation update with fewer than two nameservers is refused and makes no request.
+- Purchase, Extend, TP_CreateOrder, and ModifyNS fail closed unless Enom reports completion. A transfer order id still counts as completion when Done is omitted.
+- A non-2xx HTTP status is a transport error and is not parsed as success.
+- A timeout during Purchase or Extend looks the domain up with GetDomainInfo once and logs the OrderID. The paid command is not sent again.
+- **EndUserIP for cron** is required. Cron and command-line purchases and renewals send that address. A browser request uses the visitor IP. After upgrading, fill that field in the Enom registrar settings, or cron renewals fail.
+- A purchase with fewer than two nameservers sends `UseDNS=default`. A delegation update with fewer than two nameservers is refused.
+- `php bin/package.php` builds `enom-<version>.zip` for the extensions directory: `library/Registrar/Adapter/Enom.php` at the archive root, documentation under `docs/`, and a generic `icon.svg`. There is no `src/` prefix and no wrapping folder. Directory entries are mode `0755` and files are mode `0644`.
 - `GetAuthCode` failures are logged as warnings. The client still sees the contact-support message.
 - Notes that FOSSBilling#4656 is fixed upstream for releases after 0.8.9. The 0.8.x workaround stays.
 
