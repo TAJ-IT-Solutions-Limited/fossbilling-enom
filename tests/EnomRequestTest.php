@@ -10,7 +10,11 @@ final class EnomRequestTest extends TestCase
 {
     private function adapter(FakeEnomClient $client): Registrar_Adapter_Enom
     {
-        $adapter = new Registrar_Adapter_Enom(['uid' => 'fixture-user', 'pw' => 'fixture-pass']);
+        $adapter = new Registrar_Adapter_Enom([
+            'uid' => 'fixture-user',
+            'pw' => 'fixture-pass',
+            'end_user_ip' => '203.0.113.10',
+        ]);
         $adapter->setHttpClient($client);
 
         return $adapter;
@@ -313,7 +317,40 @@ XML;
             $this->adapter($client)->modifyNs($domain);
             $this->fail('modifyNs with no nameservers must throw');
         } catch (Registrar_Exception $e) {
-            $this->assertStringContainsString('At least one nameserver is required', $e->getMessage());
+            $this->assertStringContainsString('At least two nameservers are required', $e->getMessage());
+        }
+        $this->assertSame([], $client->calls, 'no request may reach Enom');
+    }
+
+    public function testPurchaseWithOneNameserverUsesDefaultDns(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $domain = enom_test_domain();
+        $domain->setNs1('ns1.example.net');
+        $domain->setNs2('');
+        $log = new CapturingBoxLog();
+        $adapter = $this->adapter($client);
+        $adapter->setLog($log);
+        $this->assertTrue($adapter->registerDomain($domain));
+        $body = $client->calls[0][2]['body'];
+        $this->assertSame('default', $body['UseDNS']);
+        $this->assertArrayNotHasKey('NS1', $body);
+        $this->assertCount(1, $log->warnings);
+        $this->assertStringContainsString('examplecom', $log->warnings[0]);
+        $this->assertStringContainsString('1', $log->warnings[0]);
+    }
+
+    public function testModifyNsRefusesASingleNameserver(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true']);
+        $domain = enom_test_domain();
+        $domain->setNs1('ns1.example.net');
+        $domain->setNs2('');
+        try {
+            $this->adapter($client)->modifyNs($domain);
+            $this->fail('modifyNs with one nameserver must throw');
+        } catch (Registrar_Exception $e) {
+            $this->assertSame('At least two nameservers are required to update the delegation', $e->getMessage());
         }
         $this->assertSame([], $client->calls, 'no request may reach Enom');
     }
@@ -369,12 +406,63 @@ XML;
         $this->assertStringNotContainsString('Enom', $message);
         $this->assertStringNotContainsString('SynchAuthInfo', $message);
         $this->assertSame(3004, $e->getCode());
-        $line = implode("\n", $log->errors);
+        $line = implode("\n", $log->warnings);
         $this->assertStringNotContainsString('ada@example.com', $line);
         $this->assertStringNotContainsString('fixture-pass', $line);
         $this->assertStringContainsString('examplecom', $line);
         $this->assertStringContainsString($staffDetail, $line);
         $this->assertStringContainsString('Retrieve it in the Enom control panel or send it with SynchAuthInfo', $line);
+    }
+
+    public function testAWriteWithoutDoneOrRrpCodeFailsClosed(): void
+    {
+        $client = $this->body(['ErrCount' => '0']);
+        $this->expectException(Registrar_Exception::class);
+        $this->expectExceptionMessage('Purchase was not completed');
+        $this->adapter($client)->registerDomain(enom_test_domain());
+    }
+
+    public function testAReadWithoutDoneOrRrpCodeStaysAvailableFromTheFlag(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Available' => 'true']);
+        $this->assertTrue($this->adapter($client)->isDomainAvailable(enom_test_domain()));
+    }
+
+    public function testAnHttpErrorIsATransportFailure(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true']);
+        $client->status = 503;
+        $this->expectException(Registrar_Exception::class);
+        $this->expectExceptionMessage('Enom HTTP request failed');
+        $this->adapter($client)->registerDomain(enom_test_domain());
+    }
+
+    public function testAPurchaseTimeoutChecksTheDomainAndDoesNotBuyAgain(): void
+    {
+        $client = new FakeEnomClient([
+            "THROW timeout\n",
+            "ErrCount=0\nOrderID=8841\n",
+        ]);
+        $log = new CapturingBoxLog();
+        $adapter = $this->adapter($client);
+        $adapter->setLog($log);
+        try {
+            $adapter->registerDomain(enom_test_domain());
+            $this->fail('the timeout was treated as success');
+        } catch (Registrar_Exception $e) {
+            $this->assertSame('Enom request failed', $e->getMessage());
+        }
+        $this->assertCount(2, $client->calls);
+        $this->assertSame('Purchase', $client->calls[0][2]['body']['command']);
+        $this->assertSame('GetDomainInfo', $client->calls[1][2]['body']['command']);
+        $this->assertStringContainsString('OrderID=8841', implode("\n", $log->errors));
+    }
+
+    public function testCronSendsTheConfiguredEndUserIp(): void
+    {
+        $client = $this->body(['ErrCount' => '0', 'Done' => 'true', 'RRPCode' => '200']);
+        $this->adapter($client)->registerDomain(enom_test_domain());
+        $this->assertSame('203.0.113.10', $client->calls[0][2]['body']['EndUserIP']);
     }
 }
 
@@ -383,9 +471,17 @@ final class CapturingBoxLog extends Box_Log
     /** @var list<string> */
     public array $errors = [];
 
+    /** @var list<string> */
+    public array $warnings = [];
+
     public function err(string $message): void
     {
         $this->errors[] = $message;
+    }
+
+    public function warning(string $message): void
+    {
+        $this->warnings[] = $message;
     }
 }
 
