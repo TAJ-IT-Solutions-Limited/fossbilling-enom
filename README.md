@@ -35,11 +35,9 @@ Installation is manual. FOSSBilling's extension installer does not place a domai
 2. In the admin panel, go to **System → Domain registration → Registrars → Enom → Install**.
 3. Enter the reseller UID and API token. Use FOSSBilling's test mode when the account is an OTE account.
 
-### Manually from the release archive
+### Directory package
 
-1. Download `fossbilling-enom-1.0.3.zip` from the [v1.0.3 release](https://github.com/TAJ-IT-Solutions-Limited/fossbilling-enom/releases/tag/v1.0.3).
-2. The archive has no wrapper folder. Copy `src/library/Registrar/Adapter/Enom.php` to `library/Registrar/Adapter/Enom.php` in a packaged FOSSBilling installation (`src/library/Registrar/Adapter/Enom.php` for a source checkout). README, CHANGELOG, LICENSE, and the other documentation are under `docs/` so extracting the zip at the FOSSBilling root does not overwrite core files.
-3. In the admin panel, go to **System → Domain registration → Registrars → Enom → Install**.
+`php bin/package.php` writes `dist/enom-<version>.zip`. The archive has no wrapping folder and no `src/` prefix. Copy `library/Registrar/Adapter/Enom.php` from the archive to `library/Registrar/Adapter/Enom.php` in a packaged FOSSBilling installation, or to `src/library/Registrar/Adapter/Enom.php` in a source checkout. Documentation is under `docs/`, so copying the adapter does not replace FOSSBilling's own README. `icon.svg` is a generic globe for the extensions directory. It is not Enom's logo, and it is not loaded by the registrar. The archive stays under 5 MiB. Then, in the admin panel, go to **System → Domain registration → Registrars → Enom → Install**.
 
 ## Configuration
 
