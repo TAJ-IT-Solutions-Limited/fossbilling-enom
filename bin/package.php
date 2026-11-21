@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require __DIR__ . '/directory_manifest.php';
+
 $root = dirname(__DIR__);
 $manifest = json_decode((string) file_get_contents($root . '/manifest.json'), true, 512, JSON_THROW_ON_ERROR);
 $version = (string) ($manifest['version'] ?? '');
@@ -28,6 +30,7 @@ foreach ($entries as $name => $source) {
     }
     $files[$name] = directory_lf((string) file_get_contents($source));
 }
+$files['manifest.json'] = directory_lf(directory_manifest_encode(directory_manifest_from_repo($manifest)));
 
 $outDir = $root . '/dist';
 if (!is_dir($outDir) && !mkdir($outDir) && !is_dir($outDir)) {
@@ -40,6 +43,10 @@ if (is_file($zipPath)) {
 }
 directory_zip_store($zipPath, $files);
 directory_assert_package($zipPath, $files);
+if (directory_zip_root_manifest($zipPath) !== $files['manifest.json']) {
+    fwrite(STDERR, "zip root manifest does not match the directory schema copy\n");
+    exit(1);
+}
 
 echo $zipPath . PHP_EOL;
 echo 'sha256 ' . hash_file('sha256', $zipPath) . PHP_EOL;
