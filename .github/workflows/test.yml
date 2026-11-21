@@ -19,7 +19,7 @@ jobs:
           coverage: none
       - name: Lint every PHP file
         run: find src tests tools bin -name '*.php' -print0 | xargs -0 -n1 php -l
-      - name: Build the directory package
+      - name: Build the directory package and validate its root manifest
         run: php bin/package.php
       - name: Validate composer.json
         run: composer validate --strict --no-check-lock
