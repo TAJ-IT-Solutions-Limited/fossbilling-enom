@@ -37,7 +37,7 @@ function directory_manifest_from_repo(array $repo): array
         'manifest_version' => 1,
         'type' => $type,
         'id' => (string) ($repo['id'] ?? ''),
-        'name' => (string) ($repo['name'] ?? ''),
+        'name' => 'Enom Registrar',
         'version' => (string) ($repo['version'] ?? ''),
         'description' => (string) ($repo['description'] ?? ''),
         'author' => $author,
