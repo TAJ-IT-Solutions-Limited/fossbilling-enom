@@ -39,6 +39,11 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
 
     private const URL_TEST = 'https://resellertest.enom.com/interface.asp';
 
+    /**
+     * Tests point this at a temp file. Live installs use PATH_DATA when it exists.
+     */
+    public string $pendingFile = '';
+
     /** @var array<string, mixed> */
     private array $config = [
         'uid' => '',
@@ -219,6 +224,9 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
             $params = array_merge($params, $ns);
         }
 
+        if ($this->resumePaid('Purchase', $params)) {
+            return true;
+        }
         $this->_assertDone($this->_makeRequest('Purchase', $params), 'Purchase');
 
         return true;
@@ -265,12 +273,16 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
      */
     public function renewDomain(Registrar_Domain $domain): bool
     {
-        $this->_assertDone($this->_makeRequest('Extend', [
+        $extend = [
             'SLD' => $domain->getSld(),
             'TLD' => ltrim((string) $domain->getTld(false), '.'),
             'NumYears' => $domain->getRegistrationPeriod() ?: 1,
             'EndUserIP' => $this->_endUserIp(),
-        ]), 'Extend');
+        ];
+        if ($this->resumePaid('Extend', $extend)) {
+            return true;
+        }
+        $this->_assertDone($this->_makeRequest('Extend', $extend), 'Extend');
 
         return true;
     }
@@ -843,17 +855,120 @@ class Registrar_Adapter_Enom extends Registrar_AdapterAbstract
                 'TLD' => (string) ($params['TLD'] ?? ''),
             ]);
         } catch (\Throwable) {
+            $this->savePending($command, $params, '');
             $this->getLog()->err('Enom ' . $command . ' timed out and GetDomainInfo failed');
 
             return;
         }
         $orderId = $this->_firstKey($info, ['OrderID', 'orderid']);
-        if ($orderId !== null && $orderId !== '') {
-            $this->getLog()->err('Enom ' . $command . ' timed out; OrderID=' . $orderId);
+        $known = $orderId !== null && $orderId !== '' ? (string) $orderId : '';
+        $this->savePending($command, $params, $known);
+        if ($known !== '') {
+            $this->getLog()->err('Enom ' . $command . ' timed out; OrderID=' . $known);
 
             return;
         }
         $this->getLog()->err('Enom ' . $command . ' timed out; GetDomainInfo returned no OrderID');
+    }
+
+    /**
+     * A timed-out Purchase or Extend is recorded before the error is thrown.
+     * The next attempt reads that marker and asks GetDomainInfo. It does not send the paid command again.
+     *
+     * @param array<string, scalar|null> $params
+     */
+    private function resumePaid(string $command, array $params): bool
+    {
+        if ($this->findPending($command, $params) === null) {
+            return false;
+        }
+        $info = $this->_makeRequest('GetDomainInfo', [
+            'SLD' => (string) ($params['SLD'] ?? ''),
+            'TLD' => (string) ($params['TLD'] ?? ''),
+        ]);
+        $orderId = $this->_firstKey($info, ['OrderID', 'orderid']);
+        if ($orderId !== null && $orderId !== '') {
+            $this->clearPending($command, $params);
+
+            return true;
+        }
+        throw new Registrar_Exception('Enom ' . $command . ' is still pending and was not submitted again');
+    }
+
+    /**
+     * @param array<string, scalar|null> $params
+     */
+    private function savePending(string $command, array $params, string $orderId): void
+    {
+        $rows = $this->readPending();
+        $rows[$this->pendingKey($command, $params)] = [
+            'domain' => strtolower((string) ($params['SLD'] ?? '')) . '.' . strtolower((string) ($params['TLD'] ?? '')),
+            'operation' => $command,
+            'order_id' => $orderId,
+            'time' => gmdate('c'),
+        ];
+        $this->writePending($rows);
+    }
+
+    /**
+     * @param array<string, scalar|null> $params
+     * @return array<string, string>|null
+     */
+    private function findPending(string $command, array $params): ?array
+    {
+        $row = $this->readPending()[$this->pendingKey($command, $params)] ?? null;
+
+        return is_array($row) ? $row : null;
+    }
+
+    /**
+     * @param array<string, scalar|null> $params
+     */
+    private function clearPending(string $command, array $params): void
+    {
+        $rows = $this->readPending();
+        unset($rows[$this->pendingKey($command, $params)]);
+        $this->writePending($rows);
+    }
+
+    /**
+     * @param array<string, scalar|null> $params
+     */
+    private function pendingKey(string $command, array $params): string
+    {
+        return strtolower($command) . ':' . strtolower((string) ($params['SLD'] ?? '')) . '.' . strtolower((string) ($params['TLD'] ?? ''));
+    }
+
+    /**
+     * @return array<string, array<string, string>>
+     */
+    private function readPending(): array
+    {
+        $path = $this->pendingPath();
+        if (!is_file($path)) {
+            return [];
+        }
+        $decoded = json_decode((string) file_get_contents($path), true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * @param array<string, array<string, string>> $rows
+     */
+    private function writePending(array $rows): void
+    {
+        file_put_contents($this->pendingPath(), json_encode($rows, JSON_THROW_ON_ERROR));
+    }
+
+    private function pendingPath(): string
+    {
+        if ($this->pendingFile !== '') {
+            return $this->pendingFile;
+        }
+        $dir = defined('PATH_DATA') ? PATH_DATA : sys_get_temp_dir();
+
+        return $dir . DIRECTORY_SEPARATOR . 'enom-paid-pending.json';
     }
 
     /**
