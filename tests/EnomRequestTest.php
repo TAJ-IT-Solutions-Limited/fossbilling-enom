@@ -439,12 +439,15 @@ XML;
 
     public function testAPurchaseTimeoutChecksTheDomainAndDoesNotBuyAgain(): void
     {
+        $file = tempnam(sys_get_temp_dir(), 'enom-pending');
+        $this->assertNotFalse($file);
         $client = new FakeEnomClient([
             "THROW timeout\n",
             "ErrCount=0\nOrderID=8841\n",
         ]);
         $log = new CapturingBoxLog();
         $adapter = $this->adapter($client);
+        $adapter->pendingFile = $file;
         $adapter->setLog($log);
         try {
             $adapter->registerDomain(enom_test_domain());
@@ -456,6 +459,7 @@ XML;
         $this->assertSame('Purchase', $client->calls[0][2]['body']['command']);
         $this->assertSame('GetDomainInfo', $client->calls[1][2]['body']['command']);
         $this->assertStringContainsString('OrderID=8841', implode("\n", $log->errors));
+        unlink($file);
     }
 
     public function testARetryAfterAPurchaseTimeoutDoesNotBuyAgain(): void
