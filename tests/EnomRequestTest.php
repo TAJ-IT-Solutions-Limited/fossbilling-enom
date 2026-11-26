@@ -439,12 +439,15 @@ XML;
 
     public function testAPurchaseTimeoutChecksTheDomainAndDoesNotBuyAgain(): void
     {
+        $file = tempnam(sys_get_temp_dir(), 'enom-pending');
+        $this->assertNotFalse($file);
         $client = new FakeEnomClient([
             "THROW timeout\n",
             "ErrCount=0\nOrderID=8841\n",
         ]);
         $log = new CapturingBoxLog();
         $adapter = $this->adapter($client);
+        $adapter->pendingFile = $file;
         $adapter->setLog($log);
         try {
             $adapter->registerDomain(enom_test_domain());
@@ -456,6 +459,39 @@ XML;
         $this->assertSame('Purchase', $client->calls[0][2]['body']['command']);
         $this->assertSame('GetDomainInfo', $client->calls[1][2]['body']['command']);
         $this->assertStringContainsString('OrderID=8841', implode("\n", $log->errors));
+        unlink($file);
+    }
+
+    public function testARetryAfterAPurchaseTimeoutDoesNotBuyAgain(): void
+    {
+        $file = tempnam(sys_get_temp_dir(), 'enom-pending');
+        $this->assertNotFalse($file);
+        $client = new FakeEnomClient([
+            "THROW timeout\n",
+            "ErrCount=0\nOrderID=8841\n",
+        ]);
+        $first = $this->adapter($client);
+        $first->pendingFile = $file;
+        try {
+            $first->registerDomain(enom_test_domain());
+            $this->fail('the timeout was treated as success');
+        } catch (Registrar_Exception $e) {
+            $this->assertSame('Enom request failed', $e->getMessage());
+        }
+
+        $retry = new FakeEnomClient([
+            "ErrCount=0\nOrderID=8841\n",
+        ]);
+        $second = $this->adapter($retry);
+        $second->pendingFile = $file;
+        $this->assertTrue($second->registerDomain(enom_test_domain()));
+        $this->assertCount(1, $retry->calls);
+        $this->assertSame('GetDomainInfo', $retry->calls[0][2]['body']['command']);
+        $this->assertSame(1, count(array_filter(
+            $client->calls,
+            static fn (array $call): bool => ($call[2]['body']['command'] ?? '') === 'Purchase'
+        )));
+        unlink($file);
     }
 
     public function testCronSendsTheConfiguredEndUserIp(): void
